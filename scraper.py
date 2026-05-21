@@ -1,0 +1,293 @@
+"""
+Scraper for Tattersalls and Goffs NH sale catalogues.
+
+Goffs: all lot data is in data-* attributes on the main catalogue page (SSR).
+       Cloudflare bypass — two backends, switchable via .env:
+         SCRAPER_BACKEND=scrapedo  (default) — requires SCRAPEDO_TOKEN
+         SCRAPER_BACKEND=nodriver  — opens real Chrome briefly, no token needed
+
+Tattersalls (.com and .ie): 4DCGI backend with session cookies.
+       Two-step fetch: seed session → fetch resultframe lot data.
+       No Scrape.do needed — standard HTTP with cookie handling.
+       Supports tattersalls.com (UK flat) and tattersalls.ie (Irish NH/store).
+"""
+
+import asyncio
+import os
+import re
+import httpx
+from bs4 import BeautifulSoup
+from scorer import score_lot
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;"
+        "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Language": "en-GB,en;q=0.9",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+_YEAR_RE = re.compile(r"\b(20[012]\d|199\d)\b")
+_COLOR_SEX_RE = re.compile(r"\b[A-Za-z]{1,3}\.(G|F|C|M|R|H)\b")
+_T_SEX_MAP = {"G": "Gelding", "F": "Filly", "C": "Colt", "M": "Mare", "R": "Rig", "H": "Horse"}
+_G_SEX_MAP = {"G": "Gelding", "F": "Filly", "C": "Colt", "M": "Mare", "R": "Rig", "S": "Stallion"}
+# Sale code → data URL: insert space before last 2 digits (the year)
+_SALE_CODE_RE = re.compile(r"/4DCGI/Sale/([A-Z0-9]+)/", re.IGNORECASE)
+
+
+def _fetch(url: str, scrapedo_token: str | None = None, render: bool = False) -> str:
+    if scrapedo_token:
+        params: dict = {"token": scrapedo_token, "url": url}
+        if render:
+            params["render"] = "true"
+        resp = httpx.get("https://api.scrape.do", params=params, timeout=60, follow_redirects=True)
+    else:
+        resp = httpx.get(url, headers=_HEADERS, timeout=20, follow_redirects=True)
+    resp.raise_for_status()
+    return resp.text
+
+
+def _fetch_goffs_nodriver(url: str) -> str:
+    """Bypass Cloudflare using real Chrome via nodriver. Opens a visible browser briefly."""
+    import nodriver as uc  # lazy import — only needed when SCRAPER_BACKEND=nodriver
+
+    async def _run() -> str:
+        browser = await uc.start(headless=False)
+        page = await browser.get(url)
+        for _ in range(15):
+            await asyncio.sleep(1)
+            content = await page.get_content()
+            if "data-lotnumber" in content:
+                break
+        else:
+            content = await page.get_content()
+        try:
+            await browser.stop()
+        except Exception:
+            pass
+        return content
+
+    return uc.loop().run_until_complete(_run())
+
+
+def detect_site(url: str) -> str:
+    if "tattersalls.com" in url or "tattersalls.ie" in url:
+        return "tattersalls"
+    if "goffs.com" in url:
+        return "goffs"
+    raise ValueError(f"Unsupported catalogue URL: {url}")
+
+
+def scrape_catalogue(url: str) -> tuple[str, list[dict]]:
+    """Return (sale_name, lots). Dispatches to the correct site scraper."""
+    site = detect_site(url)
+    token = os.getenv("SCRAPEDO_TOKEN")
+    if site == "tattersalls":
+        return scrape_tattersalls(url)
+    return scrape_goffs(url, token)
+
+
+# ---------------------------------------------------------------------------
+# Goffs — single page, data-* attributes, no JS rendering needed
+# ---------------------------------------------------------------------------
+
+def scrape_goffs(url: str, scrapedo_token: str | None = None) -> tuple[str, list[dict]]:
+    """
+    All lot data lives in data-* attributes on <a class="lot-table__lot"> elements.
+    Backend chosen via SCRAPER_BACKEND env var (scrapedo|nodriver).
+    """
+    backend = os.getenv("SCRAPER_BACKEND", "scrapedo").lower()
+    if backend == "nodriver":
+        html = _fetch_goffs_nodriver(url)
+    else:
+        html = _fetch(url, scrapedo_token)
+    soup = BeautifulSoup(html, "lxml")
+
+    title_tag = soup.select_one("title")
+    sale_name = title_tag.get_text(strip=True) if title_tag else "Goffs Sale"
+
+    lot_tags = soup.select("a.lot-table__lot")
+    lots = []
+    for tag in lot_tags:
+        lot = _parse_goffs_data_attrs(tag)
+        if lot:
+            lots.append(lot)
+
+    return sale_name, lots
+
+
+def _parse_goffs_data_attrs(tag: BeautifulSoup) -> dict | None:
+    lot_number = tag.get("data-lotnumber", "").strip()
+    if not lot_number:
+        return None
+
+    withdrawn = tag.get("data-withdrawn", "false").lower() == "true"
+    if withdrawn:
+        return None
+
+    sire = tag.get("data-sirename") or None
+    dam = tag.get("data-damname") or None
+    dam_sire = tag.get("data-damsire") or None
+
+    sex_code = tag.get("data-sex", "").strip().upper()
+    sex = _G_SEX_MAP.get(sex_code)
+
+    yob_raw = tag.get("data-yearofbirth", "").strip()
+    year_of_birth = int(yob_raw) if yob_raw.isdigit() else None
+
+    pedigree_score = score_lot(sire, dam_sire, None)
+
+    return {
+        "lot_number": lot_number,
+        "horse_name": tag.get("data-lotname") or None,
+        "year_of_birth": year_of_birth,
+        "sex": sex,
+        "sire": sire,
+        "dam": dam,
+        "dam_sire": dam_sire,
+        "second_dam_sire": None,
+        "pedigree_score": pedigree_score,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tattersalls — 4DCGI two-step session, resultframe lot table
+# ---------------------------------------------------------------------------
+
+def scrape_tattersalls(url: str) -> tuple[str, list[dict]]:
+    """
+    Works for tattersalls.com and tattersalls.ie.
+
+    URL structure Craig pastes:
+      https://www.tattersalls.ie/sales/{slug}/4DCGI/Sale/{CODE}/Main/...
+
+    Steps:
+      1. Extract sale code and TLD from URL
+      2. Seed session cookie via shell page (4D requires this)
+      3. Fetch resultframe data page: /4DCGI/Sale/{CODE_WITH_SPACE}
+      4. Parse lot rows (two formats: named-horse BY/EX, or sire/dam)
+    """
+    tld = "ie" if "tattersalls.ie" in url else "com"
+    secure_base = f"https://secure.tattersalls.{tld}"
+
+    m = _SALE_CODE_RE.search(url)
+    if not m:
+        raise ValueError(f"Cannot extract sale code from URL: {url}")
+    sale_code = m.group(1).upper()
+
+    # Insert space before last 2-digit year: DBY25 → DBY 25, P2P26 → P2P 26
+    data_code = re.sub(r"(\d{2})$", r" \1", sale_code)
+    shell_url = f"{secure_base}/4DCGI/Sale/{sale_code}/Main/Lots"
+    data_url = f"{secure_base}/4DCGI/Sale/{data_code.replace(' ', '%20')}"
+
+    with httpx.Client(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
+        client.get(shell_url)       # first request seeds the session cookie
+        shell_r = client.get(shell_url)
+        data_r = client.get(data_url)
+
+    # Sale name from shell page heading
+    shell_soup = BeautifulSoup(shell_r.text, "lxml")
+    heading = shell_soup.select_one(".sale-header__heading, h1, h2")
+    sale_name = heading.get_text(strip=True) if heading else f"Tattersalls {sale_code}"
+
+    # Parse lots from resultframe data
+    soup = BeautifulSoup(data_r.text, "lxml")
+    lot_table = next(
+        (t for t in soup.find_all("table") if t.find(class_="lot")),
+        None,
+    )
+    if not lot_table:
+        return sale_name, []
+
+    # Infer fallback YOB from sale code year (e.g. SOM25 → 2025 → yearlings born 2024)
+    year_digits = re.search(r"(\d{2})$", sale_code)
+    fallback_yob = (2000 + int(year_digits.group(1)) - 1) if year_digits else None
+
+    lots = []
+    for row in lot_table.find_all("tr"):
+        lot = _parse_tattersalls_row(row, fallback_yob)
+        if lot:
+            lots.append(lot)
+    return sale_name, lots
+
+
+def _parse_tattersalls_row(row: BeautifulSoup, fallback_yob: int | None = None) -> dict | None:
+    lot_td = row.find("td", class_="lot")
+    if not lot_td:
+        return None
+
+    lot_link = lot_td.find("a", class_="ll")
+    if not lot_link:
+        return None
+    lot_number = lot_link.get_text(strip=True)
+    if not lot_number:
+        return None
+    # Draft catalogues show "Draft" as display text but have unique ID in onclick
+    # e.g. goToLot("P2P26","Draft.Z48") — use that as stable lot identifier
+    if lot_number == "Draft":
+        onclick = lot_link.get("onclick", "")
+        m = re.search(r'goToLot\("[^"]+",\s*"([^"]+)"\)', onclick)
+        if m:
+            lot_number = m.group(1)
+
+    tdh = row.find("td", class_="tdh")
+    if not tdh:
+        return None
+
+    hn_tags = tdh.find_all("a", class_="hn")
+
+    if len(hn_tags) >= 2:
+        # Store/yearling format: first hn = sire, second hn = dam
+        sire = hn_tags[0].get_text(strip=True) or None
+        dam = hn_tags[1].get_text(strip=True) or None
+        horse_name = None
+    elif len(hn_tags) == 1:
+        # Named-horse format (P2P/HIT): hn = horse name, BY/EX spans = sire/dam
+        horse_name = hn_tags[0].get_text(strip=True) or None
+        sire = None
+        dam = None
+        for span in tdh.find_all("span", class_="keepTogether"):
+            small = span.find("span", class_="small")
+            if not small:
+                continue
+            label = small.get_text(strip=True).upper()
+            # Text value = span text minus the BY/EX label
+            val = span.get_text(" ", strip=True)
+            val = val[len(small.get_text(strip=True)):].strip()
+            if label == "BY":
+                sire = val or None
+            elif label == "EX":
+                dam = val or None
+    else:
+        return None
+
+    tdh_text = tdh.get_text(" ", strip=True)
+
+    year_m = _YEAR_RE.search(tdh_text)
+    year_of_birth = int(year_m.group(1)) if year_m else fallback_yob
+
+    sex_m = _COLOR_SEX_RE.search(tdh_text)
+    sex = _T_SEX_MAP.get(sex_m.group(1)) if sex_m else None
+
+    return {
+        "lot_number": lot_number,
+        "horse_name": horse_name,
+        "year_of_birth": year_of_birth,
+        "sex": sex,
+        "sire": sire,
+        "dam": dam,
+        "dam_sire": None,
+        "second_dam_sire": None,
+        "pedigree_score": score_lot(sire, None, None),
+    }

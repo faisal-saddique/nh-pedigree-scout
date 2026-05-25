@@ -42,7 +42,7 @@ st.session_state.setdefault("current_sale_id", None)
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.image("nh-pedigree-scout-logo.png", width=160)
+    st.title("NH Pedigree Scout")
     st.caption("National Hunt pedigree analysis tool")
     st.divider()
 

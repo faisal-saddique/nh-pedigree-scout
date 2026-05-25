@@ -24,7 +24,7 @@ from stallionguide import fetch_rankings
 load_dotenv()
 
 st.set_page_config(page_title="NH Pedigree Scout", layout="wide", page_icon="nh-pedigree-scout-logo.png")
-st.logo("nh-pedigree-scout-logo.png")
+st.logo("nh-pedigree-scout-logo.png", size="large")
 
 # --- DB init ---
 try:
@@ -206,8 +206,8 @@ def _lot_detail(lot_row, key_prefix: str = "") -> None:
         cols[0].metric("NH Score", f"{lot_row['pedigree_score']:.1f}/100")
         if lot_row["estimated_price_gbp"]:
             cols[1].metric("Est. Price", f"£{lot_row['estimated_price_gbp']:,}")
-        cols[2].metric("Sire", lot_row["sire"] or "—")
-        cols[3].metric("Dam's Sire", lot_row["dam_sire"] or "—")
+        cols[2].markdown(f"**Sire**\n\n{lot_row['sire'] or '—'}")
+        cols[3].markdown(f"**Dam's Sire**\n\n{lot_row['dam_sire'] or '—'}")
         if lot_row["ai_summary"]:
             st.markdown(lot_row["ai_summary"])
         else:

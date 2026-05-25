@@ -24,7 +24,7 @@ from stallionguide import fetch_rankings
 load_dotenv()
 
 st.set_page_config(page_title="NH Pedigree Scout", layout="wide", page_icon="nh-pedigree-scout-logo.png")
-st.logo("nh-pedigree-scout-logo.png", size="large")
+st.logo("nh-pedigree-scout-logo.png")
 
 # --- DB init ---
 try:
@@ -43,8 +43,7 @@ st.session_state.setdefault("current_sale_id", None)
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("NH Pedigree Scout")
-    st.caption("National Hunt pedigree analysis tool")
+    st.image("nh-pedigree-scout-logo.png", use_container_width=True)
     st.divider()
 
     catalogue_url = st.text_input(

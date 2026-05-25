@@ -198,7 +198,7 @@ def _lot_detail(lot_row, key_prefix: str = "") -> None:
         with col_fav:
             is_fav = bool(lot_row.get("is_favourite", False))
             label = "⭐ Saved" if is_fav else "☆ Save"
-            if st.button(label, key=f"{key_prefix}fav_{lot_row['lot_number']}"):
+            if st.button(label, key=f"{key_prefix}fav_{lot_row['lot_number']}", use_container_width=True):
                 toggle_favourite(int(lot_row["id"]))
                 st.rerun()
         cols = st.columns(4)

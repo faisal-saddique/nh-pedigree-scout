@@ -85,23 +85,31 @@ def _row_for(name: str) -> dict | None:
     return row
 
 
+def _best_nh_rank(row: dict) -> int | None:
+    """Return the best (lowest number) NH rank across GB/IRE and France."""
+    ranks = [r for r in (row.get("nh_rank"), row.get("nh_fr_rank")) if r]
+    return min(ranks) if ranks else None
+
+
 def _lookup(name: str | None) -> float:
     if not name:
         return _DEFAULT_SCORE
     row = _row_for(name)
-    if row and row.get("nh_rank"):
-        return _rank_to_score(row["nh_rank"])
+    if row:
+        rank = _best_nh_rank(row)
+        if rank:
+            return _rank_to_score(rank)
     key = _normalise(name)
     return NH_SIRE_SCORES.get(key) or NH_SIRE_SCORES.get(key.title()) or _DEFAULT_SCORE
 
 
 def _lookup_bm(name: str | None) -> float:
-    """Dam sire lookup — uses NH broodmare rank, falls back to sire rank."""
+    """Dam sire lookup — uses NH broodmare rank, falls back to best NH sire rank."""
     if not name:
         return _DEFAULT_SCORE
     row = _row_for(name)
     if row:
-        rank = row.get("nh_bm_rank") or row.get("nh_rank")
+        rank = row.get("nh_bm_rank") or _best_nh_rank(row)
         if rank:
             return _rank_to_score(rank)
     key = _normalise(name)

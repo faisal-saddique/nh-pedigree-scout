@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS sire_rankings (
     flat_rank    INTEGER,
     flat_winners INTEGER,
     flat_bt_pct  REAL,
+    nh_fr_rank   INTEGER,
     nh_bm_rank   INTEGER,
     updated_at   TIMESTAMP DEFAULT NOW()
 );
@@ -55,6 +56,7 @@ def init_db() -> None:
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(_DDL)
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS is_favourite BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE sire_rankings ADD COLUMN IF NOT EXISTS nh_fr_rank INTEGER")
 
 
 def upsert_sale(url: str, name: str) -> int:
@@ -141,19 +143,20 @@ def upsert_sire_rankings(rankings: dict[str, dict]) -> None:
                 """
                 INSERT INTO sire_rankings
                     (name, nh_rank, nh_winners, nh_bt_pct, nh_awd,
-                     flat_rank, flat_winners, flat_bt_pct, nh_bm_rank, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                     nh_fr_rank, flat_rank, flat_winners, flat_bt_pct, nh_bm_rank, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                 ON CONFLICT (name) DO UPDATE SET
                     nh_rank=EXCLUDED.nh_rank, nh_winners=EXCLUDED.nh_winners,
                     nh_bt_pct=EXCLUDED.nh_bt_pct, nh_awd=EXCLUDED.nh_awd,
+                    nh_fr_rank=EXCLUDED.nh_fr_rank,
                     flat_rank=EXCLUDED.flat_rank, flat_winners=EXCLUDED.flat_winners,
                     flat_bt_pct=EXCLUDED.flat_bt_pct, nh_bm_rank=EXCLUDED.nh_bm_rank,
                     updated_at=NOW()
                 """,
                 (
                     name, r.get("nh_rank"), r.get("nh_winners"), r.get("nh_bt_pct"),
-                    r.get("nh_awd"), r.get("flat_rank"), r.get("flat_winners"),
-                    r.get("flat_bt_pct"), r.get("nh_bm_rank"),
+                    r.get("nh_awd"), r.get("nh_fr_rank"), r.get("flat_rank"),
+                    r.get("flat_winners"), r.get("flat_bt_pct"), r.get("nh_bm_rank"),
                 ),
             )
 

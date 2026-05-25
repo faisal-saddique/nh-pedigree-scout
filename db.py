@@ -31,6 +31,19 @@ CREATE TABLE IF NOT EXISTS lots (
     analysed_at         TIMESTAMP,
     UNIQUE (sale_id, lot_number)
 );
+
+CREATE TABLE IF NOT EXISTS sire_rankings (
+    name         TEXT PRIMARY KEY,
+    nh_rank      INTEGER,
+    nh_winners   INTEGER,
+    nh_bt_pct    REAL,
+    nh_awd       REAL,
+    flat_rank    INTEGER,
+    flat_winners INTEGER,
+    flat_bt_pct  REAL,
+    nh_bm_rank   INTEGER,
+    updated_at   TIMESTAMP DEFAULT NOW()
+);
 """
 
 
@@ -41,6 +54,7 @@ def _conn():
 def init_db() -> None:
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(_DDL)
+        cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS is_favourite BOOLEAN DEFAULT FALSE")
 
 
 def upsert_sale(url: str, name: str) -> int:
@@ -113,6 +127,42 @@ def get_lots_df(sale_id: int) -> pd.DataFrame:
             conn,
             params=(sale_id,),
         )
+
+
+def toggle_favourite(lot_id: int) -> None:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE lots SET is_favourite = NOT is_favourite WHERE id = %s", (lot_id,))
+
+
+def upsert_sire_rankings(rankings: dict[str, dict]) -> None:
+    with _conn() as conn, conn.cursor() as cur:
+        for name, r in rankings.items():
+            cur.execute(
+                """
+                INSERT INTO sire_rankings
+                    (name, nh_rank, nh_winners, nh_bt_pct, nh_awd,
+                     flat_rank, flat_winners, flat_bt_pct, nh_bm_rank, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                ON CONFLICT (name) DO UPDATE SET
+                    nh_rank=EXCLUDED.nh_rank, nh_winners=EXCLUDED.nh_winners,
+                    nh_bt_pct=EXCLUDED.nh_bt_pct, nh_awd=EXCLUDED.nh_awd,
+                    flat_rank=EXCLUDED.flat_rank, flat_winners=EXCLUDED.flat_winners,
+                    flat_bt_pct=EXCLUDED.flat_bt_pct, nh_bm_rank=EXCLUDED.nh_bm_rank,
+                    updated_at=NOW()
+                """,
+                (
+                    name, r.get("nh_rank"), r.get("nh_winners"), r.get("nh_bt_pct"),
+                    r.get("nh_awd"), r.get("flat_rank"), r.get("flat_winners"),
+                    r.get("flat_bt_pct"), r.get("nh_bm_rank"),
+                ),
+            )
+
+
+def get_sire_rankings() -> dict[str, dict]:
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM sire_rankings")
+            return {r["name"]: dict(r) for r in cur.fetchall()}
 
 
 def get_sales() -> list[dict]:

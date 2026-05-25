@@ -4,17 +4,22 @@ import streamlit as st
 from dotenv import load_dotenv
 
 import os
+import scorer
 from analyser import analyse_lots
 from db import (
     get_lots_df,
     get_sales,
+    get_sire_rankings,
     get_unanalysed_lots,
     init_db,
+    toggle_favourite,
     update_lot_analysis,
     upsert_lots,
     upsert_sale,
+    upsert_sire_rankings,
 )
 from scraper import scrape_catalogue
+from stallionguide import fetch_rankings
 
 load_dotenv()
 
@@ -75,6 +80,16 @@ with st.sidebar:
 if run_btn and catalogue_url:
     with st.status("Scraping catalogue...", expanded=True) as status:
         try:
+            st.write("Refreshing sire rankings from Stallion Guide...")
+            try:
+                rankings = fetch_rankings()
+                upsert_sire_rankings(rankings)
+                scorer.load_rankings(rankings)
+                st.write(f"Rankings updated — {len(rankings)} sires loaded.")
+            except Exception as rank_err:
+                st.warning(f"Could not refresh rankings ({rank_err}). Using cached data.")
+                scorer.load_rankings(get_sire_rankings())
+
             st.write("Fetching lots from catalogue page...")
             sale_name, lots = scrape_catalogue(catalogue_url)
 
@@ -169,18 +184,66 @@ with st.container(horizontal=True):
 
 st.divider()
 
-tab_browser, tab_sires, tab_chart = st.tabs(["Lot Browser", "Sire Leaderboard", "Price vs Score"])
+tab_browser, tab_favourites, tab_sires, tab_chart = st.tabs(["Lot Browser", "⭐ My Favourites", "Sire Leaderboard", "Price vs Score"])
 
 # ---------------------------------------------------------------------------
 # Tab 1: Lot Browser
 # ---------------------------------------------------------------------------
+def _lot_detail(lot_row, key_prefix: str = "") -> None:
+    """Render the expanded lot detail panel with favourite toggle."""
+    with st.container(border=True):
+        col_title, col_fav = st.columns([5, 1])
+        with col_title:
+            st.subheader(f"Lot {lot_row['lot_number']}: {lot_row.get('horse_name') or 'Unnamed'}")
+        with col_fav:
+            is_fav = bool(lot_row.get("is_favourite", False))
+            label = "⭐ Saved" if is_fav else "☆ Save"
+            if st.button(label, key=f"{key_prefix}fav_{lot_row['lot_number']}"):
+                toggle_favourite(int(lot_row["id"]))
+                st.rerun()
+        cols = st.columns(4)
+        cols[0].metric("NH Score", f"{lot_row['pedigree_score']:.1f}/100")
+        if lot_row["estimated_price_gbp"]:
+            cols[1].metric("Est. Price", f"£{lot_row['estimated_price_gbp']:,}")
+        cols[2].metric("Sire", lot_row["sire"] or "—")
+        cols[3].metric("Dam's Sire", lot_row["dam_sire"] or "—")
+        if lot_row["ai_summary"]:
+            st.markdown(lot_row["ai_summary"])
+        else:
+            st.caption("AI analysis pending.")
+
+
+_DISPLAY_COLS = [
+    "lot_number", "horse_name", "year_of_birth", "sex",
+    "sire", "dam", "dam_sire", "pedigree_score", "estimated_price_gbp",
+]
+_COL_LABELS = {
+    "lot_number": "Lot", "horse_name": "Name", "year_of_birth": "YOB",
+    "sex": "Sex", "sire": "Sire", "dam": "Dam", "dam_sire": "Dam's Sire",
+    "pedigree_score": "Score", "estimated_price_gbp": "Est. Price (£)",
+}
+_DF_CONFIG = {
+    "Score": st.column_config.NumberColumn(format="%.1f"),
+    "Est. Price (£)": st.column_config.NumberColumn(format="£%d"),
+}
+
+
 with tab_browser:
-    col_search, col_sex = st.columns([3, 1])
-    with col_search:
-        search = st.text_input("Search by horse name, sire, or dam", placeholder="e.g. Flemensfirth")
-    with col_sex:
+    # Primary search row
+    s_col, sex_col = st.columns([4, 1])
+    with s_col:
+        search = st.text_input("Search", placeholder="Horse name, sire or dam...", label_visibility="collapsed")
+    with sex_col:
         sexes = ["All"] + sorted(df["sex"].dropna().unique().tolist())
-        sex_filter = st.selectbox("Sex", sexes)
+        sex_filter = st.selectbox("Sex", sexes, label_visibility="collapsed")
+
+    with st.expander("More filters"):
+        sire_col, score_col = st.columns(2)
+        with sire_col:
+            all_sires = sorted(df["sire"].dropna().unique().tolist())
+            sire_filter = st.multiselect("Sire", all_sires, placeholder="All sires")
+        with score_col:
+            score_range = st.slider("NH Score", 0.0, 100.0, (0.0, 100.0), step=1.0)
 
     view = df.copy()
     if search:
@@ -192,53 +255,48 @@ with tab_browser:
         view = view[mask]
     if sex_filter != "All":
         view = view[view["sex"] == sex_filter]
-
-    display_cols = [
-        "lot_number", "horse_name", "year_of_birth", "sex",
-        "sire", "dam", "dam_sire", "pedigree_score", "estimated_price_gbp",
+    if sire_filter:
+        view = view[view["sire"].isin(sire_filter)]
+    view = view[
+        view["pedigree_score"].isna()
+        | ((view["pedigree_score"] >= score_range[0]) & (view["pedigree_score"] <= score_range[1]))
     ]
-    view = view[display_cols].rename(columns={
-        "lot_number": "Lot",
-        "horse_name": "Name",
-        "year_of_birth": "YOB",
-        "sex": "Sex",
-        "sire": "Sire",
-        "dam": "Dam",
-        "dam_sire": "Dam's Sire",
-        "pedigree_score": "Score",
-        "estimated_price_gbp": "Est. Price (£)",
-    })
 
     event = st.dataframe(
-        view,
+        view[_DISPLAY_COLS].rename(columns=_COL_LABELS),
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
-        column_config={
-            "Score": st.column_config.NumberColumn(format="%.1f"),
-            "Est. Price (£)": st.column_config.NumberColumn(format="£%d"),
-        },
+        column_config=_DF_CONFIG,
     )
 
-    # Show AI summary for selected lot
     if event.selection.rows:
-        selected_lot_num = view.iloc[event.selection.rows[0]]["Lot"]
+        selected_lot_num = view[_DISPLAY_COLS].rename(columns=_COL_LABELS).iloc[event.selection.rows[0]]["Lot"]
         lot_row = df[df["lot_number"] == selected_lot_num].iloc[0]
-        with st.container(border=True):
-            st.subheader(f"Lot {lot_row['lot_number']}: {lot_row.get('horse_name') or 'Unnamed'}")
-            cols = st.columns(4)
-            cols[0].metric("NH Score", f"{lot_row['pedigree_score']:.1f}/100")
-            if lot_row["estimated_price_gbp"]:
-                cols[1].metric("Est. Price", f"£{lot_row['estimated_price_gbp']:,}")
-            cols[2].metric("Sire", lot_row["sire"] or "—")
-            cols[3].metric("Dam's Sire", lot_row["dam_sire"] or "—")
-            if lot_row["ai_summary"]:
-                st.markdown(f"**AI Assessment:** {lot_row['ai_summary']}")
-            else:
-                st.caption("AI analysis pending.")
+        _lot_detail(lot_row, key_prefix="browser_")
 
 # ---------------------------------------------------------------------------
-# Tab 2: Sire Leaderboard
+# Tab 2: My Favourites
+# ---------------------------------------------------------------------------
+with tab_favourites:
+    fav_df = df[df["is_favourite"] == True] if "is_favourite" in df.columns else df.iloc[0:0]
+    if fav_df.empty:
+        st.info("No favourites saved yet. Click ☆ Save on any lot to add it here.")
+    else:
+        fav_event = st.dataframe(
+            fav_df[_DISPLAY_COLS].rename(columns=_COL_LABELS),
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config=_DF_CONFIG,
+        )
+        if fav_event.selection.rows:
+            selected = fav_df[_DISPLAY_COLS].rename(columns=_COL_LABELS).iloc[fav_event.selection.rows[0]]["Lot"]
+            lot_row = df[df["lot_number"] == selected].iloc[0]
+            _lot_detail(lot_row, key_prefix="fav_")
+
+# ---------------------------------------------------------------------------
+# Tab 3: Sire Leaderboard
 # ---------------------------------------------------------------------------
 with tab_sires:
     sire_stats = (

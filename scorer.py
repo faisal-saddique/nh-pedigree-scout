@@ -1,7 +1,7 @@
 import re
 
+# Hardcoded fallback — used when sire_rankings table has no entry for a sire
 NH_SIRE_SCORES: dict[str, float] = {
-    # Premium NH sires (9-10)
     "Flemensfirth": 9.5,
     "Presenting": 9.0,
     "Oscar": 9.0,
@@ -11,7 +11,6 @@ NH_SIRE_SCORES: dict[str, float] = {
     "Robin des Champs": 8.5,
     "Stowaway": 8.5,
     "Kayf Tara": 8.5,
-    # Very good NH sires (7-8.5)
     "Yeats": 8.0,
     "Walk In The Park": 8.0,
     "Galiway": 7.5,
@@ -38,7 +37,6 @@ NH_SIRE_SCORES: dict[str, float] = {
     "Sadler's Wells": 7.0,
     "Strong Gale": 7.0,
     "Roselier": 7.0,
-    # Good NH sires (5.5-7)
     "Old Vic": 6.5,
     "Bob Back": 6.5,
     "Be My Native": 6.5,
@@ -57,28 +55,62 @@ NH_SIRE_SCORES: dict[str, float] = {
     "Blueprint": 5.5,
 }
 
-_DEFAULT_SCORE = 4.0  # Unknown or unproven NH sire
+_DEFAULT_SCORE = 4.0
+_rankings: dict[str, dict] = {}  # loaded from DB/API before each scrape run
+
+
+def load_rankings(rankings: dict[str, dict]) -> None:
+    """Populate module-level rankings cache. Call before scraping."""
+    global _rankings
+    _rankings = rankings
 
 
 def _normalise(name: str) -> str:
-    """Strip country suffix like ' (IRE)', ' (FR)', ' (GB)', ' (USA)'."""
     return re.sub(r"\s*\([A-Z]{2,3}\)\s*$", "", name.strip())
+
+
+def _rank_to_score(rank: int) -> float:
+    """Rank 1 → 10.0, Rank 50 → 4.0, linear."""
+    return round(max(4.0, 10.0 - (rank - 1) * 6.0 / 49), 2)
+
+
+def _row_for(name: str) -> dict | None:
+    if not _rankings:
+        return None
+    key = _normalise(name)
+    row = _rankings.get(key)
+    if not row:
+        kl = key.lower()
+        row = next((v for k, v in _rankings.items() if k.lower() == kl), None)
+    return row
 
 
 def _lookup(name: str | None) -> float:
     if not name:
         return _DEFAULT_SCORE
+    row = _row_for(name)
+    if row and row.get("nh_rank"):
+        return _rank_to_score(row["nh_rank"])
     key = _normalise(name)
-    if key in NH_SIRE_SCORES:
-        return NH_SIRE_SCORES[key]
-    if key.title() in NH_SIRE_SCORES:
-        return NH_SIRE_SCORES[key.title()]
-    return _DEFAULT_SCORE
+    return NH_SIRE_SCORES.get(key) or NH_SIRE_SCORES.get(key.title()) or _DEFAULT_SCORE
+
+
+def _lookup_bm(name: str | None) -> float:
+    """Dam sire lookup — uses NH broodmare rank, falls back to sire rank."""
+    if not name:
+        return _DEFAULT_SCORE
+    row = _row_for(name)
+    if row:
+        rank = row.get("nh_bm_rank") or row.get("nh_rank")
+        if rank:
+            return _rank_to_score(rank)
+    key = _normalise(name)
+    return NH_SIRE_SCORES.get(key) or NH_SIRE_SCORES.get(key.title()) or _DEFAULT_SCORE
 
 
 def score_lot(sire: str | None, dam_sire: str | None, second_dam_sire: str | None) -> float:
-    """Return 0-100 NH pedigree score. Sire 50%, dam sire 30%, 2nd dam sire 20%."""
+    """Return 0–100 NH pedigree score. Sire 50%, dam sire 30%, 2nd dam sire 20%."""
     s = _lookup(sire) * 0.5
-    ds = _lookup(dam_sire) * 0.3
+    ds = _lookup_bm(dam_sire) * 0.3
     sds = _lookup(second_dam_sire) * 0.2
     return round((s + ds + sds) * 10, 1)

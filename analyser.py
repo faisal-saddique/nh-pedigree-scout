@@ -26,13 +26,18 @@ When assessing each lot:
 - Be concise and practical, as if advising a buyer at the ring
 
 The pedigree score (0–100) is a quantitative NH sire index for quick reference.
+
+Format your summary exactly as:
+Pros: [1-2 key positives about pedigree, jumping potential, or value]
+Cons: [1-2 key risks or negatives]
+Est. Price: £[low]-£[high]
 """.strip()
 
 
 class LotResult(BaseModel):
     lot_number: str = Field(description="Lot number exactly as provided")
-    estimated_price_gbp: int = Field(description="Estimated sale price in GBP as a whole number")
-    summary: str = Field(description="2-3 sentence expert assessment of NH potential and price justification")
+    estimated_price_gbp: int = Field(description="Estimated sale price in GBP as a whole number (midpoint of range)")
+    summary: str = Field(description="Pros/Cons assessment in the format: 'Pros: ... Cons: ... Est. Price: £x-£y'")
 
 
 class BatchResult(BaseModel):

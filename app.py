@@ -23,7 +23,8 @@ from stallionguide import fetch_rankings
 
 load_dotenv()
 
-st.set_page_config(page_title="NH Pedigree Scout", layout="wide")
+st.set_page_config(page_title="NH Pedigree Scout", layout="wide", page_icon="nh-pedigree-scout-logo.png")
+st.logo("nh-pedigree-scout-logo.png")
 
 # --- DB init ---
 try:

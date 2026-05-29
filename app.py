@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 import os
 import scorer
+from scorer import score_lot_with_breakdown
 from analyser import analyse_lots
 from db import (
     get_lots_df,
@@ -190,7 +191,7 @@ tab_browser, tab_favourites, tab_sires, tab_chart = st.tabs(["Lot Browser", "⭐
 # Tab 1: Lot Browser
 # ---------------------------------------------------------------------------
 def _lot_detail(lot_row, key_prefix: str = "") -> None:
-    """Render the expanded lot detail panel with favourite toggle."""
+    """Render the expanded lot detail panel with favourite toggle and score breakdown."""
     with st.container(border=True):
         col_title, col_fav = st.columns([5, 1])
         with col_title:
@@ -198,15 +199,77 @@ def _lot_detail(lot_row, key_prefix: str = "") -> None:
         with col_fav:
             is_fav = bool(lot_row.get("is_favourite", False))
             label = "⭐ Saved" if is_fav else "☆ Save"
-            if st.button(label, key=f"{key_prefix}fav_{lot_row['lot_number']}", use_container_width=True):
+            if st.button(label, key=f"{key_prefix}fav_{lot_row['lot_number']}"):
                 toggle_favourite(int(lot_row["id"]))
                 st.rerun()
+
         cols = st.columns(4)
         cols[0].metric("NH Score", f"{lot_row['pedigree_score']:.1f}/100")
         if lot_row["estimated_price_gbp"]:
             cols[1].metric("Est. Price", f"£{lot_row['estimated_price_gbp']:,}")
-        cols[2].markdown(f"**Sire**\n\n{lot_row['sire'] or '—'}")
-        cols[3].markdown(f"**Dam's Sire**\n\n{lot_row['dam_sire'] or '—'}")
+        def _disp(v): return v if isinstance(v, str) and v.strip() else "—"
+        cols[2].markdown(f"**Sire**\n\n{_disp(lot_row.get('sire'))}")
+        cols[3].markdown(f"**Dam's Sire**\n\n{_disp(lot_row.get('dam_sire'))}")
+
+        # Score breakdown
+        _, bd = score_lot_with_breakdown(
+            lot_row.get("sire"),
+            lot_row.get("dam_sire"),
+            lot_row.get("second_dam_sire"),
+        )
+        with st.expander("Score breakdown"):
+            b1, b2, b3, b4 = st.columns(4)
+
+            sire_rank_label = (
+                f"NH rank #{bd['sire_nh_rank']}" if bd["sire_nh_rank"]
+                else f"NH FR rank #{bd['sire_nh_fr_rank']}" if bd["sire_nh_fr_rank"]
+                else "Not in live rankings"
+            )
+            awd_label = f" · {bd['sire_nh_awd']:.1f}f avg" if bd["sire_nh_awd"] else ""
+            b1.metric(
+                "Sire (50%)",
+                f"{bd['sire_contribution']:.1f} pts",
+                help=f"{bd['sire_name']}\n{sire_rank_label}{awd_label}\nSource: {bd['sire_source']}",
+            )
+
+            bm_rank_label = f"NH BM rank #{bd['dam_sire_nh_bm_rank']}" if bd["dam_sire_nh_bm_rank"] else "Not in BM rankings"
+            b2.metric(
+                "Dam's Sire (30%)",
+                f"{bd['dam_sire_contribution']:.1f} pts",
+                help=f"{bd['dam_sire_name']}\n{bm_rank_label} · {bd['dam_sire_bm_tier']}\nSource: {bd['dam_sire_source']}",
+            )
+
+            b3.metric(
+                "2nd Dam's Sire (20%)",
+                f"{bd['second_dam_sire_contribution']:.1f} pts",
+                help=f"{bd['second_dam_sire_name']}\nSource: {bd['second_dam_sire_source']}",
+            )
+
+            if bd["nick_score"] > 0:
+                b4.metric(
+                    "Nick bonus",
+                    f"+{bd['nick_bonus']:.1f} pts",
+                    help=f"{bd['sire_name']} × {bd['dam_sire_name']}\n{bd['nick_description']}",
+                )
+            else:
+                b4.metric(
+                    "Nick bonus",
+                    "+0 pts",
+                    help="No documented elite nick for this sire × dam's sire pairing." if lot_row.get("dam_sire") else "Dam's sire unknown — nick analysis unavailable.",
+                )
+
+            total_with_nick = round(min(100.0, bd["base_score"] + bd["nick_bonus"]), 1)
+            if bd["nick_bonus"] > 0:
+                st.caption(
+                    f"Base score: {bd['base_score']:.1f} · Nick bonus: +{bd['nick_bonus']:.1f} · "
+                    f"Adjusted: **{total_with_nick:.1f}/100** ✦ {bd['nick_description'].split(' — ')[0]}"
+                )
+            else:
+                st.caption(
+                    f"Sire {bd['sire_contribution']:.1f} + Dam's sire {bd['dam_sire_contribution']:.1f} + "
+                    f"2nd dam's sire {bd['second_dam_sire_contribution']:.1f} = {bd['base_score']:.1f}/100"
+                )
+
         if lot_row["ai_summary"]:
             st.markdown(lot_row["ai_summary"])
         else:

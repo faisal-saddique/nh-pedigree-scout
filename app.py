@@ -59,7 +59,7 @@ with st.sidebar:
         "Catalogue URL",
         placeholder="https://www.tattersalls.com/sales-catalogue.php?sale=...",
         help="Paste a Tattersalls or Goffs catalogue URL and click Run.",
-    )
+    ).strip()
 
     run_btn = st.button(
         "Scrape & Analyse",
@@ -150,6 +150,7 @@ if load_hist_btn and hist_url:
 # Scrape + Analyse flow
 # ---------------------------------------------------------------------------
 if run_btn and catalogue_url:
+    catalogue_url = catalogue_url.strip()
     with st.status("Scraping catalogue...", expanded=True) as status:
         try:
             st.write("Refreshing sire rankings from Stallion Guide...")

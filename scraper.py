@@ -81,6 +81,33 @@ def _fetch_goffs_nodriver(url: str) -> str:
     return uc.loop().run_until_complete(_run())
 
 
+def fetch_lot_pdf_text(lot_url: str, scrapedo_token: str | None = None) -> tuple[str | None, str | None]:
+    """
+    Fetch a Goffs individual lot page, extract the pedigree PDF URL and return
+    the PDF text (via Filestack CDN — free, no Scrape.do credit needed for PDF).
+
+    Returns (pdf_url, pdf_text). Both None on failure.
+    Uses 1 Scrape.do credit for the lot page HTML fetch.
+    """
+    from pdf_parser import filestack_txt_url, fetch_pdf_text
+    try:
+        html = _fetch(lot_url, scrapedo_token)
+    except Exception:
+        return None, None
+
+    txt_url = filestack_txt_url(html)
+    if not txt_url:
+        return None, None
+
+    # Extract raw PDF URL from the Filestack URL
+    import re
+    pdf_url_m = re.search(r'(https://media\.goffs\.com/[^\s"\']+\.pdf)', txt_url)
+    pdf_url = pdf_url_m.group(1) if pdf_url_m else txt_url
+
+    text = fetch_pdf_text(txt_url)
+    return pdf_url, text
+
+
 def detect_site(url: str) -> str:
     if "tattersalls.com" in url or "tattersalls.ie" in url:
         return "tattersalls"
@@ -104,7 +131,9 @@ def scrape_catalogue(url: str) -> tuple[str, list[dict]]:
 
 def scrape_goffs(url: str, scrapedo_token: str | None = None) -> tuple[str, list[dict]]:
     """
-    All lot data lives in data-* attributes on <a class="lot-table__lot"> elements.
+    All lot data lives in data-* attributes on either:
+      - <a class="lot-table__lot">  (main Goffs sales — Arkle, Summer, etc.)
+      - <a class="goffs-365-catalogue__card">  (GoffsGo online sales)
     Backend chosen via SCRAPER_BACKEND env var (scrapedo|nodriver).
     """
     backend = os.getenv("SCRAPER_BACKEND", "scrapedo").lower()
@@ -117,17 +146,24 @@ def scrape_goffs(url: str, scrapedo_token: str | None = None) -> tuple[str, list
     title_tag = soup.select_one("title")
     sale_name = title_tag.get_text(strip=True) if title_tag else "Goffs Sale"
 
+    # Determine currency from URL region
+    if "/sale/IRE/" in url:
+        currency = "EUR"
+    else:
+        currency = "GBP"  # UK and GoffsGo sales priced in GBP
+
     lot_tags = soup.select("a.lot-table__lot")
-    lots = []
-    for tag in lot_tags:
-        lot = _parse_goffs_data_attrs(tag)
-        if lot:
-            lots.append(lot)
+    if lot_tags:
+        lots = [l for tag in lot_tags if (l := _parse_goffs_data_attrs(tag, currency))]
+    else:
+        # GoffsGo format
+        card_tags = soup.select("a.goffs-365-catalogue__card")
+        lots = [l for tag in card_tags if (l := _parse_goffs365_card(tag, currency))]
 
     return sale_name, lots
 
 
-def _parse_goffs_data_attrs(tag: BeautifulSoup) -> dict | None:
+def _parse_goffs_data_attrs(tag, currency: str = "EUR") -> dict | None:
     lot_number = tag.get("data-lotnumber", "").strip()
     if not lot_number:
         return None
@@ -148,6 +184,24 @@ def _parse_goffs_data_attrs(tag: BeautifulSoup) -> dict | None:
 
     pedigree_score = score_lot(sire, dam_sire, None)
 
+    # Price / outcome (populated on completed/live sales)
+    price_raw = tag.get("data-price", "").strip()
+    price = int(price_raw) if price_raw and price_raw.isdigit() and int(price_raw) > 0 else None
+
+    sold = tag.get("data-sold", "false").lower() == "true"
+    notsold = tag.get("data-notsold", "false").lower() == "true"
+    vendorsale = tag.get("data-vendorsale", "false").lower() == "true"
+    purchaser = tag.get("data-purchaser") or None
+
+    if vendorsale:
+        outcome = "vendor_sale"
+    elif notsold:
+        outcome = "not_sold"
+    elif sold:
+        outcome = "sold"
+    else:
+        outcome = None  # upcoming / not yet offered
+
     return {
         "lot_number": lot_number,
         "horse_name": tag.get("data-lotname") or None,
@@ -158,6 +212,66 @@ def _parse_goffs_data_attrs(tag: BeautifulSoup) -> dict | None:
         "dam_sire": dam_sire,
         "second_dam_sire": None,
         "pedigree_score": pedigree_score,
+        "price": price,
+        "currency": currency,
+        "outcome": outcome,
+        "purchaser": purchaser,
+    }
+
+
+def _parse_goffs365_card(tag, currency: str = "GBP") -> dict | None:
+    """Parse a GoffsGo <a class='goffs-365-catalogue__card'> element."""
+    lot_number = tag.get("data-lotnumber", "").strip()
+    if not lot_number:
+        return None
+
+    withdrawn = tag.get("data-iswithdrawn", "false").lower() == "true"
+    if withdrawn:
+        return None
+
+    sire = tag.get("data-sirename") or None
+    dam = tag.get("data-damname") or None
+    dam_sire = tag.get("data-damsire") or None
+
+    sex_code = tag.get("data-sex", "").strip().upper()
+    sex = _G_SEX_MAP.get(sex_code)
+
+    yob_raw = tag.get("data-yearofbirth", "").strip()
+    year_of_birth = int(yob_raw) if yob_raw.isdigit() else None
+
+    pedigree_score = score_lot(sire, dam_sire, None)
+
+    price_raw = tag.get("data-price", "").strip()
+    price = int(price_raw) if price_raw and price_raw.isdigit() and int(price_raw) > 0 else None
+
+    vendor = tag.get("data-isvendorsale", "false").lower() == "true"
+    reserve_met = tag.get("data-isreservemet", "false").lower() == "true"
+    auction_state = tag.get("data-auctionstate", "").lower()
+    purchaser = tag.get("data-purchaser") or None
+
+    if vendor:
+        outcome = "vendor_sale"
+    elif auction_state == "closed" and not reserve_met:
+        outcome = "not_sold"
+    elif reserve_met:
+        outcome = "sold"
+    else:
+        outcome = None
+
+    return {
+        "lot_number": lot_number,
+        "horse_name": tag.get("data-lotname") or None,
+        "year_of_birth": year_of_birth,
+        "sex": sex,
+        "sire": sire,
+        "dam": dam,
+        "dam_sire": dam_sire,
+        "second_dam_sire": None,
+        "pedigree_score": pedigree_score,
+        "price": price,
+        "currency": currency,
+        "outcome": outcome,
+        "purchaser": purchaser,
     }
 
 
@@ -165,7 +279,7 @@ def _parse_goffs_data_attrs(tag: BeautifulSoup) -> dict | None:
 # Tattersalls — 4DCGI two-step session, resultframe lot table
 # ---------------------------------------------------------------------------
 
-def scrape_tattersalls(url: str) -> tuple[str, list[dict]]:
+def scrape_tattersalls(url: str, _currency: str | None = None) -> tuple[str, list[dict]]:
     """
     Works for tattersalls.com and tattersalls.ie.
 
@@ -179,6 +293,7 @@ def scrape_tattersalls(url: str) -> tuple[str, list[dict]]:
       4. Parse lot rows (two formats: named-horse BY/EX, or sire/dam)
     """
     tld = "ie" if "tattersalls.ie" in url else "com"
+    currency = _currency or ("EUR" if tld == "ie" else "GBP")
     secure_base = f"https://secure.tattersalls.{tld}"
 
     m = _SALE_CODE_RE.search(url)
@@ -216,13 +331,13 @@ def scrape_tattersalls(url: str) -> tuple[str, list[dict]]:
 
     lots = []
     for row in lot_table.find_all("tr"):
-        lot = _parse_tattersalls_row(row, fallback_yob)
+        lot = _parse_tattersalls_row(row, fallback_yob, currency)
         if lot:
             lots.append(lot)
     return sale_name, lots
 
 
-def _parse_tattersalls_row(row: BeautifulSoup, fallback_yob: int | None = None) -> dict | None:
+def _parse_tattersalls_row(row, fallback_yob: int | None = None, currency: str = "EUR") -> dict | None:
     lot_td = row.find("td", class_="lot")
     if not lot_td:
         return None
@@ -280,6 +395,29 @@ def _parse_tattersalls_row(row: BeautifulSoup, fallback_yob: int | None = None) 
     sex_m = _COLOR_SEX_RE.search(tdh_text)
     sex = _T_SEX_MAP.get(sex_m.group(1)) if sex_m else None
 
+    # Price and outcome — only present on completed sales (td class="price" exists)
+    price = None
+    outcome = None
+    purchaser = None
+    price_td = row.find("td", class_="price")
+    if price_td:
+        price_text = price_td.get_text(strip=True).replace(",", "").replace(".", "")
+        price = int(price_text) if price_text.isdigit() else None
+        # Purchaser is the td immediately before td.price
+        all_tds = row.find_all("td")
+        price_idx = all_tds.index(price_td)
+        if price_idx >= 1:
+            purchaser_text = all_tds[price_idx - 1].get_text(strip=True)
+            if "Withdrawn" in purchaser_text:
+                outcome = "withdrawn"
+            elif "Not Sold" in purchaser_text:
+                outcome = "not_sold"
+            elif purchaser_text.lower() == "vendor":
+                outcome = "vendor_sale"
+            else:
+                outcome = "sold"
+                purchaser = purchaser_text or None
+
     return {
         "lot_number": lot_number,
         "horse_name": horse_name,
@@ -290,4 +428,8 @@ def _parse_tattersalls_row(row: BeautifulSoup, fallback_yob: int | None = None) 
         "dam_sire": None,
         "second_dam_sire": None,
         "pedigree_score": score_lot(sire, None, None),
+        "price": price,
+        "currency": currency,
+        "outcome": outcome,
+        "purchaser": purchaser,
     }

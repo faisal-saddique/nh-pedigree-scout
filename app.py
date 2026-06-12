@@ -1,3 +1,4 @@
+import json
 import time
 import altair as alt
 import streamlit as st
@@ -8,19 +9,26 @@ import scorer
 from scorer import score_lot_with_breakdown
 from analyser import analyse_lots
 from db import (
+    get_historical_sales,
     get_lots_df,
+    get_lots_without_pdf,
     get_sales,
+    get_sire_comparables,
     get_sire_rankings,
     get_unanalysed_lots,
+    has_historical_sale,
     init_db,
     toggle_favourite,
     update_lot_analysis,
+    update_lot_pdf_data,
+    upsert_historical_lots,
     upsert_lots,
     upsert_sale,
     upsert_sire_rankings,
 )
-from scraper import scrape_catalogue
+from scraper import detect_site, fetch_lot_pdf_text, scrape_catalogue, scrape_goffs, scrape_tattersalls
 from stallionguide import fetch_rankings
+from pdf_parser import parse_pedigree_pdf_text, score_dam_production
 
 load_dotenv()
 
@@ -61,6 +69,43 @@ with st.sidebar:
 
     st.divider()
 
+    # Historical sales data
+    with st.expander("📊 Historical Sales Data"):
+        hist_sales = get_historical_sales()
+        if hist_sales:
+            st.caption(f"{sum(s['lot_count'] for s in hist_sales):,} lots across {len(hist_sales)} past sales loaded")
+            for hs in hist_sales[:5]:
+                st.caption(f"• {hs['sale_name'] or hs['sale_url']} ({hs['lot_count']} lots)")
+        else:
+            st.caption("No historical data loaded yet.")
+
+        hist_url = st.text_input(
+            "Past sale URL",
+            placeholder="https://www.goffs.com/sale/IRE/Arkle-Sale-2025",
+            key="hist_url_input",
+            label_visibility="collapsed",
+        )
+        load_hist_btn = st.button("Load Sale Results", key="load_hist", disabled=not hist_url)
+
+        with st.expander("Suggested past sales"):
+            st.markdown(
+                "**Goffs (Ireland — EUR)**\n"
+                "- `https://www.goffs.com/sale/IRE/Arkle-Sale-2025`\n"
+                "- `https://www.goffs.com/sale/IRE/Arkle-Sale-Part-2-2025`\n"
+                "- `https://www.goffs.com/sale/IRE/Arkle-Sale-2024`\n"
+                "- `https://www.goffs.com/sale/IRE/Arkle-Sale-Part-2-2024`\n"
+                "- `https://www.goffs.com/sale/IRE/Arkle-Sale-2023`\n\n"
+                "**Goffs (UK — GBP)**\n"
+                "- `https://www.goffs.com/sale/UK/Summer-Sale-2025`\n"
+                "- `https://www.goffs.com/sale/UK/Summer-Sale-2024`\n\n"
+                "**GoffsGo (GBP)**\n"
+                "- `https://www.goffs.com/sale/GoffsGo/GoffsGo-June-Sale`\n\n"
+                "**Tattersalls IE (EUR — paste shell URL)**\n"
+                "- Craig's URL format: `https://www.tattersalls.ie/sales/.../4DCGI/Sale/P2P26/Main/Lots`"
+            )
+
+    st.divider()
+
     # Past sales selector
     sales = get_sales()
     if sales:
@@ -74,6 +119,32 @@ with st.sidebar:
         )
         if st.button("Load", key="load_sale"):
             st.session_state.current_sale_id = chosen_id
+
+# ---------------------------------------------------------------------------
+# Load historical sale results
+# ---------------------------------------------------------------------------
+if load_hist_btn and hist_url:
+    hist_url_clean = hist_url.strip()
+    if has_historical_sale(hist_url_clean):
+        st.sidebar.info(f"Already loaded: {hist_url_clean}")
+    else:
+        with st.sidebar.status("Loading historical sale...", expanded=True) as hist_status:
+            try:
+                site = detect_site(hist_url_clean)
+                token = os.getenv("SCRAPEDO_TOKEN")
+                if site == "goffs":
+                    hist_name, hist_lots = scrape_goffs(hist_url_clean, token)
+                else:
+                    hist_name, hist_lots = scrape_tattersalls(hist_url_clean)
+                n = upsert_historical_lots(hist_url_clean, hist_name, hist_lots)
+                priced = sum(1 for l in hist_lots if l.get("price"))
+                hist_status.update(
+                    label=f"Loaded {n} priced lots from {hist_name}",
+                    state="complete",
+                )
+            except Exception as e:
+                hist_status.update(label="Failed", state="error")
+                st.sidebar.error(str(e))
 
 # ---------------------------------------------------------------------------
 # Scrape + Analyse flow
@@ -106,6 +177,12 @@ if run_btn and catalogue_url:
             sale_id = upsert_sale(catalogue_url, sale_name)
             upsert_lots(sale_id, lots)
 
+            # Auto-store hammer prices if this is a completed sale
+            priced_lots = [l for l in lots if l.get("price") and l.get("outcome") and l["outcome"] != "withdrawn"]
+            if priced_lots:
+                n_stored = upsert_historical_lots(catalogue_url, sale_name, priced_lots)
+                st.write(f"Stored **{n_stored}** hammer prices in historical database.")
+
             st.session_state.current_sale_id = sale_id
             status.update(label=f"Scraped {len(lots)} lots from {sale_name}", state="complete")
 
@@ -114,9 +191,52 @@ if run_btn and catalogue_url:
             st.error(str(e))
             st.stop()
 
+    # PDF dam records enrichment (Goffs only — needs individual lot pages via Scrape.do)
+    if "goffs.com" in catalogue_url:
+        pending_pdf = get_lots_without_pdf(st.session_state.current_sale_id)
+        if pending_pdf:
+            scrapedo_token = os.getenv("SCRAPEDO_TOKEN")
+            n_pending = len(pending_pdf)
+            pdf_progress = st.progress(0, text=f"Fetching dam records for {n_pending} lots via PDF...")
+
+            with st.status("Enriching with dam records from PDFs...", expanded=True) as pdf_status:
+                done_pdf = 0
+                failed_pdf = 0
+                _cat_base = catalogue_url.split("?")[0].rstrip("/")
+                if "/lots" in _cat_base:
+                    _cat_base = _cat_base.rsplit("/lots", 1)[0]
+
+                for lot in pending_pdf:
+                    lot_page_url = f"{_cat_base}/lots/{lot['lot_number']}"
+                    pdf_url, pdf_text = fetch_lot_pdf_text(lot_page_url, scrapedo_token)
+                    if pdf_text:
+                        dam_recs = parse_pedigree_pdf_text(pdf_text)
+                        prod_score = score_dam_production(dam_recs)
+                        update_lot_pdf_data(lot["id"], dam_recs, prod_score, pdf_url or "")
+                        done_pdf += 1
+                    else:
+                        failed_pdf += 1
+
+                    pct = (done_pdf + failed_pdf) / n_pending
+                    pdf_progress.progress(pct, text=f"Dam records: {done_pdf}/{n_pending} fetched...")
+
+                label = f"Dam records fetched — {done_pdf} enriched"
+                if failed_pdf:
+                    label += f", {failed_pdf} skipped (withdrawn/no PDF)"
+                pdf_status.update(label=label, state="complete")
+            pdf_progress.progress(1.0, text="Dam records complete")
+
     # AI analysis
     unanalysed = get_unanalysed_lots(st.session_state.current_sale_id)
     if unanalysed:
+        # Attach historical comparables per sire (cached by sire name for the batch)
+        _comp_cache: dict = {}
+        for lot in unanalysed:
+            sire = lot.get("sire") or ""
+            if sire not in _comp_cache:
+                _comp_cache[sire] = get_sire_comparables(sire)
+            lot["historical_comps"] = _comp_cache[sire]
+
         batch_size = int(os.getenv("LLM_BATCH_SIZE", "10"))
         model = os.getenv("LLM_MODEL", "google:gemini-2.5-flash")
         n_batches = -(-len(unanalysed) // batch_size)  # ceiling division
@@ -203,13 +323,18 @@ def _lot_detail(lot_row, key_prefix: str = "") -> None:
                 toggle_favourite(int(lot_row["id"]))
                 st.rerun()
 
-        cols = st.columns(4)
+        _dam_prod = lot_row.get("dam_production_score")
+        _has_prod = _dam_prod is not None and str(_dam_prod) not in ("nan", "None", "")
+        n_cols = 5 if _has_prod else 4
+        cols = st.columns(n_cols)
         cols[0].metric("NH Score", f"{lot_row['pedigree_score']:.1f}/100")
         if lot_row["estimated_price_gbp"]:
             cols[1].metric("Est. Price", f"£{lot_row['estimated_price_gbp']:,}")
+        if _has_prod:
+            cols[2].metric("Dam Production", f"{float(_dam_prod):.1f}/10")
         def _disp(v): return v if isinstance(v, str) and v.strip() else "—"
-        cols[2].markdown(f"**Sire**\n\n{_disp(lot_row.get('sire'))}")
-        cols[3].markdown(f"**Dam's Sire**\n\n{_disp(lot_row.get('dam_sire'))}")
+        cols[-2].markdown(f"**Sire**\n\n{_disp(lot_row.get('sire'))}")
+        cols[-1].markdown(f"**Dam's Sire**\n\n{_disp(lot_row.get('dam_sire'))}")
 
         # Score breakdown
         _, bd = score_lot_with_breakdown(
@@ -269,6 +394,75 @@ def _lot_detail(lot_row, key_prefix: str = "") -> None:
                     f"Sire {bd['sire_contribution']:.1f} + Dam's sire {bd['dam_sire_contribution']:.1f} + "
                     f"2nd dam's sire {bd['second_dam_sire_contribution']:.1f} = {bd['base_score']:.1f}/100"
                 )
+
+        # Dam records (from PDF enrichment)
+        dam_records_raw = lot_row.get("dam_records")
+        _has_dam_records = dam_records_raw is not None and dam_records_raw is not float("nan") and str(dam_records_raw) not in ("nan", "None", "")
+        if _has_dam_records:
+            dam_records = dam_records_raw if isinstance(dam_records_raw, dict) else json.loads(dam_records_raw)
+            _dam_labels = {"1": "1st Dam", "2": "2nd Dam", "3": "3rd Dam", "4": "4th Dam"}
+            with st.expander("Dam records (from PDF)"):
+                for dam_key in ["1", "2", "3", "4"]:
+                    dam = dam_records.get(dam_key)
+                    if not dam:
+                        continue
+                    name = dam.get("name") or "Unknown"
+                    label = _dam_labels[dam_key]
+
+                    # Own record summary
+                    if dam.get("unraced") and dam.get("own_wins", 0) == 0:
+                        own_str = "Unraced"
+                    elif dam.get("own_wins", 0) == 0:
+                        own_str = "Placed only"
+                    else:
+                        own_str = f"{dam['own_wins']} win{'s' if dam['own_wins'] != 1 else ''}"
+                        if dam.get("prize_money"):
+                            own_str += f" · £{dam['prize_money']:,}"
+
+                    grade_parts = []
+                    if dam.get("gr1", 0) > 0:
+                        grade_parts.append(f"Gr.1×{dam['gr1']}")
+                    if dam.get("gr2", 0) > 0:
+                        grade_parts.append(f"Gr.2×{dam['gr2']}")
+                    if dam.get("gr3", 0) > 0:
+                        grade_parts.append(f"Gr.3×{dam['gr3']}")
+                    if dam.get("listed", 0) > 0:
+                        grade_parts.append(f"L.×{dam['listed']}")
+                    grade_str = " ".join(grade_parts) if grade_parts else ""
+
+                    # Production
+                    foals, runners, winners = dam.get("foals", 0), dam.get("runners", 0), dam.get("winners", 0)
+                    if foals > 0:
+                        pct = dam.get("winners_pct", 0)
+                        prod_str = f"{foals} foals · {runners} runners · **{winners} winners** ({pct:.0f}%)"
+                    else:
+                        prod_str = "No production data"
+
+                    st.markdown(
+                        f"**{label}** — {name}\n\n"
+                        f"Record: {own_str}{' · ' + grade_str if grade_str else ''}\n\n"
+                        f"Production: {prod_str}"
+                    )
+                    if dam_key != "4":
+                        st.divider()
+
+                prod_score = lot_row.get("dam_production_score")
+                if prod_score is not None:
+                    st.caption(f"Dam production quality score: **{prod_score:.1f}/10**")
+
+        # Historical price comparables
+        sire = lot_row.get("sire")
+        if sire:
+            comps = get_sire_comparables(sire)
+            if comps:
+                sym = "£" if comps.get("currency") == "GBP" else "€"
+                with st.expander(f"Historical prices — {sire}"):
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Median (sold)", f"{sym}{comps['median']:,}")
+                    c2.metric("Range", f"{sym}{comps['min_price']:,} – {sym}{comps['max_price']:,}")
+                    c3.metric("Sold lots", comps["count"])
+                    sales_str = ", ".join((comps.get("sale_names") or [])[:4])
+                    st.caption(f"From: {sales_str}")
 
         if lot_row["ai_summary"]:
             st.markdown(lot_row["ai_summary"])

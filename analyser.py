@@ -47,13 +47,63 @@ class BatchResult(BaseModel):
 _batch_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_SYSTEM_PROMPT)
 
 
+def _dam_summary(dam_records) -> str:
+    """Build a concise dam line summary for the AI prompt."""
+    if not dam_records:
+        return ""
+    import json
+    if isinstance(dam_records, str):
+        try:
+            dam_records = json.loads(dam_records)
+        except Exception:
+            return ""
+    lines = []
+    labels = {"1": "1st dam", "2": "2nd dam", "3": "3rd dam", "4": "4th dam"}
+    for key in ["1", "2", "3", "4"]:
+        dam = dam_records.get(key) or dam_records.get(int(key))
+        if not dam:
+            continue
+        name = dam.get("name") or "Unknown"
+        wins = dam.get("own_wins", 0)
+        gr1, gr2, gr3 = dam.get("gr1", 0), dam.get("gr2", 0), dam.get("gr3", 0)
+        foals, runners, winners = dam.get("foals", 0), dam.get("runners", 0), dam.get("winners", 0)
+        grade = ""
+        if gr1:
+            grade = f"Gr.1 performer"
+        elif gr2:
+            grade = f"Gr.2 performer"
+        elif gr3:
+            grade = f"Gr.3 performer"
+        record = f"{wins}W" if wins else ("unraced" if dam.get("unraced") else "placed")
+        prod = f"{foals}f/{runners}r/{winners}w" if foals else "no prod."
+        lines.append(f"{labels[key]}: {name} ({record}{', ' + grade if grade else ''}) · {prod}")
+    return " | ".join(lines)
+
+
+def _comp_summary(comps: dict | None) -> str:
+    """Format historical comparables for AI prompt."""
+    if not comps:
+        return ""
+    sym = "£" if comps.get("currency") == "GBP" else "€"
+    median = comps.get("median", 0)
+    lo = comps.get("min_price", 0)
+    hi = comps.get("max_price", 0)
+    n = comps.get("count", 0)
+    sales = ", ".join((comps.get("sale_names") or [])[:3])
+    return f"sire median {sym}{median:,} (range {sym}{lo:,}–{sym}{hi:,}, N={n} sold, from: {sales})"
+
+
 def _lot_block(lot: dict) -> str:
+    dam_line = _dam_summary(lot.get("dam_records"))
+    comp_line = _comp_summary(lot.get("historical_comps"))
     return (
         f"Lot {lot['lot_number']}: {lot.get('horse_name') or 'Unnamed'} | "
         f"YOB: {lot.get('year_of_birth') or '?'} | Sex: {lot.get('sex') or '?'} | "
         f"Sire: {lot.get('sire') or '?'} | Dam: {lot.get('dam') or '?'} | "
         f"Dam's sire: {lot.get('dam_sire') or '?'} | "
         f"NH score: {lot.get('pedigree_score', 0):.1f}/100"
+        + (f" | Dam lines: {dam_line}" if dam_line else "")
+        + (f" | Historical prices: {comp_line}" if comp_line else "")
     )
 
 

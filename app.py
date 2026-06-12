@@ -11,6 +11,7 @@ from analyser import analyse_lots
 from db import (
     get_historical_sales,
     get_lots_df,
+    delete_sale,
     get_lots_without_pdf,
     get_sales,
     get_sire_comparables,
@@ -117,8 +118,15 @@ with st.sidebar:
             format_func=lambda x: sale_options[x],
             label_visibility="collapsed",
         )
-        if st.button("Load", key="load_sale"):
+        col_load, col_del = st.columns([3, 1])
+        if col_load.button("Load", key="load_sale", use_container_width=True):
             st.session_state.current_sale_id = chosen_id
+            st.rerun()
+        if col_del.button("🗑", key="del_sale", use_container_width=True, help="Delete this sale"):
+            delete_sale(chosen_id)
+            if st.session_state.current_sale_id == chosen_id:
+                st.session_state.current_sale_id = None
+            st.rerun()
 
 # ---------------------------------------------------------------------------
 # Load historical sale results

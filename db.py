@@ -221,6 +221,12 @@ def get_sales() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+def delete_sale(sale_id: int) -> None:
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM sales WHERE id = %s", (sale_id,))
+
+
 # ---------------------------------------------------------------------------
 # Historical lots (hammer prices from completed sales)
 # ---------------------------------------------------------------------------

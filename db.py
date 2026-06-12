@@ -140,7 +140,7 @@ def get_lots_without_pdf(sale_id: int) -> list[dict]:
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT * FROM lots WHERE sale_id = %s AND pdf_scraped_at IS NULL ORDER BY lot_number::int NULLS LAST",
+                "SELECT * FROM lots WHERE sale_id = %s AND pdf_scraped_at IS NULL ORDER BY NULLIF(regexp_replace(lot_number, '[^0-9]', '', 'g'), '')::INT NULLS LAST, lot_number",
                 (sale_id,),
             )
             return [dict(r) for r in cur.fetchall()]
@@ -171,7 +171,7 @@ def get_unanalysed_lots(sale_id: int) -> list[dict]:
 def get_lots_df(sale_id: int) -> pd.DataFrame:
     with _conn() as conn:
         return pd.read_sql(
-            "SELECT * FROM lots WHERE sale_id = %s ORDER BY lot_number::int NULLS LAST",
+            "SELECT * FROM lots WHERE sale_id = %s ORDER BY NULLIF(regexp_replace(lot_number, '[^0-9]', '', 'g'), '')::INT NULLS LAST, lot_number",
             conn,
             params=(sale_id,),
         )

@@ -17,7 +17,7 @@ import os
 import re
 import httpx
 from bs4 import BeautifulSoup
-from scorer import score_lot
+from scorer import detect_discipline, score_lot_for_discipline
 
 _HEADERS = {
     "User-Agent": (
@@ -182,7 +182,8 @@ def _parse_goffs_data_attrs(tag, currency: str = "EUR") -> dict | None:
     yob_raw = tag.get("data-yearofbirth", "").strip()
     year_of_birth = int(yob_raw) if yob_raw.isdigit() else None
 
-    pedigree_score = score_lot(sire, dam_sire, None)
+    discipline = detect_discipline(sire)
+    pedigree_score = score_lot_for_discipline(sire, dam_sire, None, discipline)
 
     # Price / outcome (populated on completed/live sales)
     price_raw = tag.get("data-price", "").strip()
@@ -211,6 +212,7 @@ def _parse_goffs_data_attrs(tag, currency: str = "EUR") -> dict | None:
         "dam": dam,
         "dam_sire": dam_sire,
         "second_dam_sire": None,
+        "discipline": discipline,
         "pedigree_score": pedigree_score,
         "price": price,
         "currency": currency,
@@ -239,7 +241,8 @@ def _parse_goffs365_card(tag, currency: str = "GBP") -> dict | None:
     yob_raw = tag.get("data-yearofbirth", "").strip()
     year_of_birth = int(yob_raw) if yob_raw.isdigit() else None
 
-    pedigree_score = score_lot(sire, dam_sire, None)
+    discipline = detect_discipline(sire)
+    pedigree_score = score_lot_for_discipline(sire, dam_sire, None, discipline)
 
     price_raw = tag.get("data-price", "").strip()
     price = int(price_raw) if price_raw and price_raw.isdigit() and int(price_raw) > 0 else None
@@ -267,6 +270,7 @@ def _parse_goffs365_card(tag, currency: str = "GBP") -> dict | None:
         "dam": dam,
         "dam_sire": dam_sire,
         "second_dam_sire": None,
+        "discipline": discipline,
         "pedigree_score": pedigree_score,
         "price": price,
         "currency": currency,
@@ -418,6 +422,7 @@ def _parse_tattersalls_row(row, fallback_yob: int | None = None, currency: str =
                 outcome = "sold"
                 purchaser = purchaser_text or None
 
+    discipline = detect_discipline(sire)
     return {
         "lot_number": lot_number,
         "horse_name": horse_name,
@@ -427,7 +432,8 @@ def _parse_tattersalls_row(row, fallback_yob: int | None = None, currency: str =
         "dam": dam,
         "dam_sire": None,
         "second_dam_sire": None,
-        "pedigree_score": score_lot(sire, None, None),
+        "discipline": discipline,
+        "pedigree_score": score_lot_for_discipline(sire, None, None, discipline),
         "price": price,
         "currency": currency,
         "outcome": outcome,

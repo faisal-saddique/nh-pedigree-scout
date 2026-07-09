@@ -77,6 +77,7 @@ def init_db() -> None:
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS dam_production_score FLOAT")
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS pdf_url TEXT")
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS pdf_scraped_at TIMESTAMP")
+        cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS discipline TEXT DEFAULT 'nh'")
 
 
 def upsert_sale(url: str, name: str) -> int:
@@ -101,10 +102,10 @@ def upsert_lots(sale_id: int, lots: list[dict]) -> None:
                 """
                 INSERT INTO lots (
                     sale_id, lot_number, horse_name, year_of_birth, sex,
-                    sire, dam, dam_sire, second_dam_sire, pedigree_score
+                    sire, dam, dam_sire, second_dam_sire, pedigree_score, discipline
                 ) VALUES (
                     %(sale_id)s, %(lot_number)s, %(horse_name)s, %(year_of_birth)s, %(sex)s,
-                    %(sire)s, %(dam)s, %(dam_sire)s, %(second_dam_sire)s, %(pedigree_score)s
+                    %(sire)s, %(dam)s, %(dam_sire)s, %(second_dam_sire)s, %(pedigree_score)s, %(discipline)s
                 )
                 ON CONFLICT (sale_id, lot_number) DO UPDATE SET
                     horse_name      = EXCLUDED.horse_name,
@@ -114,9 +115,10 @@ def upsert_lots(sale_id: int, lots: list[dict]) -> None:
                     dam             = EXCLUDED.dam,
                     dam_sire        = EXCLUDED.dam_sire,
                     second_dam_sire = EXCLUDED.second_dam_sire,
-                    pedigree_score  = EXCLUDED.pedigree_score
+                    pedigree_score  = EXCLUDED.pedigree_score,
+                    discipline      = EXCLUDED.discipline
                 """,
-                {**lot, "sale_id": sale_id},
+                {"discipline": "nh", **lot, "sale_id": sale_id},
             )
 
 

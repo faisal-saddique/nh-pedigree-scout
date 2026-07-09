@@ -321,10 +321,16 @@ tab_browser, tab_favourites, tab_sires, tab_chart = st.tabs(["Lot Browser", "⭐
 # ---------------------------------------------------------------------------
 def _lot_detail(lot_row, key_prefix: str = "") -> None:
     """Render the expanded lot detail panel with favourite toggle and score breakdown."""
+    discipline = str(lot_row.get("discipline") or "nh").lower()
+    disc_badge = "🏇 Flat" if discipline == "flat" else "🦘 NH"
+    score_label = "Flat Score" if discipline == "flat" else "NH Score"
+
     with st.container(border=True):
-        col_title, col_fav = st.columns([5, 1])
+        col_title, col_disc, col_fav = st.columns([4, 1, 1])
         with col_title:
             st.subheader(f"Lot {lot_row['lot_number']}: {lot_row.get('horse_name') or 'Unnamed'}")
+        with col_disc:
+            st.markdown(f"**{disc_badge}**")
         with col_fav:
             is_fav = bool(lot_row.get("is_favourite", False))
             label = "⭐ Saved" if is_fav else "☆ Save"
@@ -336,7 +342,7 @@ def _lot_detail(lot_row, key_prefix: str = "") -> None:
         _has_prod = _dam_prod is not None and str(_dam_prod) not in ("nan", "None", "")
         n_cols = 5 if _has_prod else 4
         cols = st.columns(n_cols)
-        cols[0].metric("NH Score", f"{lot_row['pedigree_score']:.1f}/100")
+        cols[0].metric(score_label, f"{lot_row['pedigree_score']:.1f}/100")
         if lot_row["estimated_price_gbp"]:
             cols[1].metric("Est. Price", f"£{lot_row['estimated_price_gbp']:,}")
         if _has_prod:
@@ -350,28 +356,44 @@ def _lot_detail(lot_row, key_prefix: str = "") -> None:
             lot_row.get("sire"),
             lot_row.get("dam_sire"),
             lot_row.get("second_dam_sire"),
+            discipline=discipline,
         )
         with st.expander("Score breakdown"):
             b1, b2, b3, b4 = st.columns(4)
 
-            sire_rank_label = (
-                f"NH rank #{bd['sire_nh_rank']}" if bd["sire_nh_rank"]
-                else f"NH FR rank #{bd['sire_nh_fr_rank']}" if bd["sire_nh_fr_rank"]
-                else "Not in live rankings"
-            )
-            awd_label = f" · {bd['sire_nh_awd']:.1f}f avg" if bd["sire_nh_awd"] else ""
+            if discipline == "flat":
+                sire_rank_label = (
+                    f"Flat rank #{bd['sire_flat_rank']}" if bd["sire_flat_rank"]
+                    else "Not in live flat rankings"
+                )
+                bt_label = f" · {bd['sire_flat_bt_pct']:.1f}% BTW" if bd.get("sire_flat_bt_pct") else ""
+            else:
+                sire_rank_label = (
+                    f"NH rank #{bd['sire_nh_rank']}" if bd["sire_nh_rank"]
+                    else f"NH FR rank #{bd['sire_nh_fr_rank']}" if bd["sire_nh_fr_rank"]
+                    else "Not in live rankings"
+                )
+                bt_label = f" · {bd['sire_nh_awd']:.1f}f avg" if bd["sire_nh_awd"] else ""
             b1.metric(
                 "Sire (50%)",
                 f"{bd['sire_contribution']:.1f} pts",
-                help=f"{bd['sire_name']}\n{sire_rank_label}{awd_label}\nSource: {bd['sire_source']}",
+                help=f"{bd['sire_name']}\n{sire_rank_label}{bt_label}\nSource: {bd['sire_source']}",
             )
 
-            bm_rank_label = f"NH BM rank #{bd['dam_sire_nh_bm_rank']}" if bd["dam_sire_nh_bm_rank"] else "Not in BM rankings"
-            b2.metric(
-                "Dam's Sire (30%)",
-                f"{bd['dam_sire_contribution']:.1f} pts",
-                help=f"{bd['dam_sire_name']}\n{bm_rank_label} · {bd['dam_sire_bm_tier']}\nSource: {bd['dam_sire_source']}",
-            )
+            if discipline == "flat":
+                ds_rank_label = f"Flat rank #{bd['dam_sire_flat_rank']}" if bd["dam_sire_flat_rank"] else "Not in flat rankings"
+                b2.metric(
+                    "Dam's Sire (30%)",
+                    f"{bd['dam_sire_contribution']:.1f} pts",
+                    help=f"{bd['dam_sire_name']}\n{ds_rank_label}\nSource: {bd['dam_sire_source']}",
+                )
+            else:
+                bm_rank_label = f"NH BM rank #{bd['dam_sire_nh_bm_rank']}" if bd["dam_sire_nh_bm_rank"] else "Not in BM rankings"
+                b2.metric(
+                    "Dam's Sire (30%)",
+                    f"{bd['dam_sire_contribution']:.1f} pts",
+                    help=f"{bd['dam_sire_name']}\n{bm_rank_label} · {bd['dam_sire_bm_tier']}\nSource: {bd['dam_sire_source']}",
+                )
 
             b3.metric(
                 "2nd Dam's Sire (20%)",
@@ -481,12 +503,12 @@ def _lot_detail(lot_row, key_prefix: str = "") -> None:
 
 _DISPLAY_COLS = [
     "lot_number", "horse_name", "year_of_birth", "sex",
-    "sire", "dam", "dam_sire", "pedigree_score", "estimated_price_gbp",
+    "sire", "dam", "dam_sire", "discipline", "pedigree_score", "estimated_price_gbp",
 ]
 _COL_LABELS = {
     "lot_number": "Lot", "horse_name": "Name", "year_of_birth": "YOB",
     "sex": "Sex", "sire": "Sire", "dam": "Dam", "dam_sire": "Dam's Sire",
-    "pedigree_score": "Score", "estimated_price_gbp": "Est. Price (£)",
+    "discipline": "Type", "pedigree_score": "Score", "estimated_price_gbp": "Est. Price (£)",
 }
 _DF_CONFIG = {
     "Score": st.column_config.NumberColumn(format="%.1f"),
@@ -509,7 +531,7 @@ with tab_browser:
             all_sires = sorted(df["sire"].dropna().unique().tolist())
             sire_filter = st.multiselect("Sire", all_sires, placeholder="All sires")
         with score_col:
-            score_range = st.slider("NH Score", 0.0, 100.0, (0.0, 100.0), step=1.0)
+            score_range = st.slider("Score", 0.0, 100.0, (0.0, 100.0), step=1.0)
 
     view = df.copy()
     if search:
@@ -583,12 +605,12 @@ with tab_sires:
 
     with col_chart:
         with st.container(border=True):
-            st.subheader("Top 20 Sires by NH Score")
+            st.subheader("Top 20 Sires by Score")
             chart = (
                 alt.Chart(sire_stats)
                 .mark_bar()
                 .encode(
-                    x=alt.X("avg_score:Q", title="Avg NH Score"),
+                    x=alt.X("avg_score:Q", title="Avg Score"),
                     y=alt.Y("sire:N", sort="-x", title=None),
                     tooltip=["sire", "lots", "avg_score", "avg_price"],
                 )
@@ -621,12 +643,12 @@ with tab_chart:
         st.info("Run AI analysis to see the Price vs Score chart.")
     else:
         with st.container(border=True):
-            st.subheader("Estimated Price vs NH Pedigree Score")
+            st.subheader("Estimated Price vs Pedigree Score")
             scatter = (
                 alt.Chart(plot_df)
                 .mark_circle(size=80, opacity=0.7)
                 .encode(
-                    x=alt.X("pedigree_score:Q", title="NH Pedigree Score (0–100)"),
+                    x=alt.X("pedigree_score:Q", title="Pedigree Score (0–100)"),
                     y=alt.Y("estimated_price_gbp:Q", title="Estimated Price (£)"),
                     color=alt.Color("sex:N", title="Sex"),
                     tooltip=[

@@ -15,20 +15,29 @@ _MODEL = os.getenv("LLM_MODEL", "google:gemini-2.5-flash")
 _BATCH_SIZE = int(os.getenv("LLM_BATCH_SIZE", "10"))
 
 _SYSTEM_PROMPT = """
-You are an expert National Hunt (NH) bloodstock advisor with 20 years of experience at Tattersalls
-and Goffs sales in Ireland and the UK. You specialise in point-to-point and NH store horse breeding.
+You are an expert bloodstock advisor with 20 years of experience at Tattersalls and Goffs sales
+in Ireland and the UK. You specialise in both National Hunt (NH) store horse breeding and Flat
+racing yearling and store horse assessment.
 
-When assessing each lot:
-- Consider the sire's NH record and reputation
-- Assess the dam line for NH stamina and jumping ability
-- Factor in sex (geldings and colts sell differently to fillies)
-- Estimate sale price in GBP based on current NH store horse market (typical range £2,000–£60,000)
-- Be concise and practical, as if advising a buyer at the ring
+Each lot is tagged [NH] or [FLAT] at the start of its description.
 
-The pedigree score (0–100) is a quantitative NH sire index for quick reference.
+For [NH] lots:
+- Consider the sire's NH record and reputation for producing jumpers and chasers
+- Assess the dam line for NH stamina, jumping ability and point-to-point potential
+- Factor in sex (geldings sell well for NH; fillies carry breeding premium)
+- Estimate sale price in GBP for the NH/point-to-point store horse market (typical range £2,000–£60,000)
+
+For [FLAT] lots:
+- Consider the sire's Flat record, Classic potential and distance aptitude
+- Assess the dam line for speed, turf/all-weather preference and sprint vs staying profile
+- Factor in sex (colts carry stud premium; fillies carry breeding premium)
+- Estimate sale price in GBP for the Flat yearling/store market (typical range £5,000–£200,000)
+
+The pedigree score (0–100) is a quantitative sire index on the relevant scale (NH or Flat).
+Be concise and practical, as if advising a buyer at the ring.
 
 Format your summary exactly as:
-Pros: [1-2 key positives about pedigree, jumping potential, or value]
+Pros: [1-2 key positives]
 Cons: [1-2 key risks or negatives]
 Est. Price: £[low]-£[high]
 """.strip()
@@ -97,11 +106,12 @@ def _lot_block(lot: dict) -> str:
     dam_line = _dam_summary(lot.get("dam_records"))
     comp_line = _comp_summary(lot.get("historical_comps"))
     return (
+        f"[{lot.get('discipline', 'nh').upper()}] "
         f"Lot {lot['lot_number']}: {lot.get('horse_name') or 'Unnamed'} | "
         f"YOB: {lot.get('year_of_birth') or '?'} | Sex: {lot.get('sex') or '?'} | "
         f"Sire: {lot.get('sire') or '?'} | Dam: {lot.get('dam') or '?'} | "
         f"Dam's sire: {lot.get('dam_sire') or '?'} | "
-        f"NH score: {lot.get('pedigree_score', 0):.1f}/100"
+        f"Pedigree score: {lot.get('pedigree_score', 0):.1f}/100"
         + (f" | Dam lines: {dam_line}" if dam_line else "")
         + (f" | Historical prices: {comp_line}" if comp_line else "")
     )
@@ -110,7 +120,7 @@ def _lot_block(lot: dict) -> str:
 def analyse_batch(lots: list[dict]) -> list[LotResult]:
     """Analyse a batch of lots in one LLM call. Returns results in same order as input."""
     prompt = (
-        f"Analyse these {len(lots)} NH sale lots. "
+        f"Analyse these {len(lots)} sale lots (each tagged [NH] or [FLAT] — use the right criteria for each). "
         "For each, provide lot_number (exact), estimated_price_gbp, and summary.\n\n"
         + "\n".join(_lot_block(l) for l in lots)
     )

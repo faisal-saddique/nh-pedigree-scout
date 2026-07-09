@@ -14,3 +14,5 @@ wheels/
 
 # Non-project files
 extras/
+.DS_Store
+.playwright-mcp/

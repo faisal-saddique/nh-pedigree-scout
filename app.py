@@ -118,15 +118,30 @@ with st.sidebar:
             format_func=lambda x: sale_options[x],
             label_visibility="collapsed",
         )
-        col_load, col_del = st.columns([3, 1])
-        if col_load.button("Load", key="load_sale", use_container_width=True):
-            st.session_state.current_sale_id = chosen_id
-            st.rerun()
-        if col_del.button("🗑", key="del_sale", use_container_width=True, help="Delete this sale"):
-            delete_sale(chosen_id)
-            if st.session_state.current_sale_id == chosen_id:
+        def _do_load(sid):
+            st.session_state.current_sale_id = sid
+
+        def _do_delete(sid):
+            delete_sale(sid)
+            if st.session_state.current_sale_id == sid:
                 st.session_state.current_sale_id = None
-            st.rerun()
+
+        col_load, col_del = st.columns([3, 1])
+        col_load.button(
+            "Load",
+            key="load_sale",
+            use_container_width=True,
+            on_click=_do_load,
+            args=(chosen_id,),
+        )
+        col_del.button(
+            "🗑",
+            key="del_sale",
+            use_container_width=True,
+            help="Delete this sale",
+            on_click=_do_delete,
+            args=(chosen_id,),
+        )
 
 # ---------------------------------------------------------------------------
 # Load historical sale results

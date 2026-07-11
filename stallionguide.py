@@ -19,6 +19,7 @@ Year suffix = current calendar year (2026 covers 2025-26 NH season and 2026 flat
 """
 import datetime
 import httpx
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _API = "https://api.stallionguide.com/data"
 _HEADERS = {
@@ -81,19 +82,24 @@ def fetch_rankings() -> dict[str, dict]:
             name = row["Sire"].strip()
             combined.setdefault(name, {})["nh_fr_rank"] = row["Rank"]
 
-        # Flat — all sale-specific tables, keep best rank per sire
-        for suffix in _FLAT_SUFFIXES:
+        # Flat — fetch all sale-specific tables in parallel, keep best rank per sire
+        def _fetch_flat(suffix: int) -> list[dict]:
             flat_id = f"{year}{suffix}"
-            for row in _post(client, "LeadingSiresTable_Read", flat_id):
-                name = row["Sire"].strip()
-                existing_rank = combined.get(name, {}).get("flat_rank")
-                new_rank = row["Rank"]
-                if existing_rank is None or new_rank < existing_rank:
-                    combined.setdefault(name, {}).update({
-                        "flat_rank": new_rank,
-                        "flat_winners": row["Winners"],
-                        "flat_bt_pct": row.get("BTWinnersToRunnersPer", 0.0),
-                    })
+            return _post(client, "LeadingSiresTable_Read", flat_id)
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_fetch_flat, s): s for s in _FLAT_SUFFIXES}
+            for future in as_completed(futures):
+                for row in future.result():
+                    name = row["Sire"].strip()
+                    existing_rank = combined.get(name, {}).get("flat_rank")
+                    new_rank = row["Rank"]
+                    if existing_rank is None or new_rank < existing_rank:
+                        combined.setdefault(name, {}).update({
+                            "flat_rank": new_rank,
+                            "flat_winners": row["Winners"],
+                            "flat_bt_pct": row.get("BTWinnersToRunnersPer", 0.0),
+                        })
 
         # NH Broodmare sires
         for row in _post(client, "LeadingSiresTable_Read", bm_id):

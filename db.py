@@ -264,38 +264,74 @@ def upsert_historical_lots(sale_url: str, sale_name: str, lots: list[dict]) -> i
     return count
 
 
-def get_sire_comparables(sire_name: str) -> dict | None:
+_BREEZE_UP_SALE_PATTERNS = (
+    "breeze",
+    "breeze-up",
+    "breezeup",
+)
+
+
+def get_sire_comparables(sire_name: str, sale_type: str = "standard") -> dict | None:
     """
     Return price stats for sold lots by this sire from historical data.
     Uses only outcome='sold' lots. Returns None if fewer than 3 data points.
+
+    sale_type='breeze_up': restrict to breeze-up historical sales only.
+      Falls back to all sales if fewer than 3 breeze-up data points exist.
+    sale_type='standard': exclude breeze-up sales so yearling/store prices
+      aren't inflated by breeze-up premiums.
     """
     if not sire_name:
         return None
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    currency,
-                    COUNT(*)                                                         AS count,
-                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price)::INT          AS median,
-                    MIN(price)                                                        AS min_price,
-                    MAX(price)                                                        AS max_price,
-                    ARRAY_AGG(DISTINCT sale_name ORDER BY sale_name)                 AS sale_names
-                FROM historical_lots
-                WHERE LOWER(TRIM(sire)) = LOWER(TRIM(%s))
-                  AND outcome = 'sold'
-                  AND price > 0
-                GROUP BY currency
-                ORDER BY count DESC
-                LIMIT 1
-                """,
-                (sire_name,),
-            )
-            row = cur.fetchone()
-            if not row or row["count"] < 3:
-                return None
-            return dict(row)
+
+            def _query(extra_where: str, params: tuple) -> dict | None:
+                cur.execute(
+                    f"""
+                    SELECT
+                        currency,
+                        COUNT(*)                                                         AS count,
+                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price)::INT          AS median,
+                        MIN(price)                                                        AS min_price,
+                        MAX(price)                                                        AS max_price,
+                        ARRAY_AGG(DISTINCT sale_name ORDER BY sale_name)                 AS sale_names
+                    FROM historical_lots
+                    WHERE LOWER(TRIM(sire)) = LOWER(TRIM(%s))
+                      AND outcome = 'sold'
+                      AND price > 0
+                      {extra_where}
+                    GROUP BY currency
+                    ORDER BY count DESC
+                    LIMIT 1
+                    """,
+                    (sire_name, *params),
+                )
+                row = cur.fetchone()
+                return dict(row) if row and row["count"] >= 3 else None
+
+            if sale_type == "breeze_up":
+                # First try breeze-up sales only
+                pattern_cond = " AND (" + " OR ".join(
+                    f"LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS
+                ) + ")"
+                params = tuple(f"%{p}%" for p in _BREEZE_UP_SALE_PATTERNS)
+                result = _query(pattern_cond, params)
+                if result:
+                    return result
+                # Fall back to all sales (with note) if < 3 breeze-up data points
+                return _query("", ())
+            else:
+                # Standard: exclude breeze-up inflated prices
+                excl_cond = " AND NOT (" + " OR ".join(
+                    f"LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS
+                ) + ")"
+                params = tuple(f"%{p}%" for p in _BREEZE_UP_SALE_PATTERNS)
+                result = _query(excl_cond, params)
+                if result:
+                    return result
+                # Fall back to all sales if no non-breeze-up data
+                return _query("", ())
 
 
 def get_historical_sales() -> list[dict]:

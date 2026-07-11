@@ -98,14 +98,57 @@ _FLAT_SIRE_SCORES: dict[str, float] = {
     "Saxon warrior": 7.0,
     "Time Test": 6.5,
     "Ulysses": 6.5,
+    # European sires not always in rankings
+    "Palace Pier": 8.0,
+    "St Mark's Basilica": 7.8,
+    "Blackbeard": 7.0,
+    "Bayside Boy": 6.5,
+    "Persian King": 7.0,
+    "Starman": 7.0,
+    "Cracksman": 7.5,
+    "Mohaather": 6.5,
+    "Hello Youmzain": 6.5,
+    "Torquator Tasso": 6.5,
+    "Ghaiyyath": 7.0,
+    "Pinatubo": 7.5,
+    "Masar": 7.0,
+    "Japan": 7.0,
+    "Sottsass": 7.0,
+    "Almanzor": 7.5,
+    "Earthlight": 6.5,
+    "Gleneagles": 7.0,
+    "Intello": 7.0,
+    "Caravaggio": 7.0,
+    "Churchill": 7.0,
+    "Footstepsinthesand": 6.0,
+    # North American sires
+    "Practical Joke": 6.5,
+    "Candy Ride": 6.5,
+    "Into Mischief": 7.5,
+    "Constitution": 7.0,
+    "Gun Runner": 7.0,
+    "American Pharoah": 7.5,
+    "Justify": 7.0,
+    "Essential Quality": 7.0,
+    "Tapit": 7.5,
+    "War Front": 7.5,
+    # Australian sires
+    "Zoustar": 7.0,
+    "I Am Invincible": 7.5,
+    "Snitzel": 7.5,
+    "Not a Single Doubt": 6.5,
 }
 
 _DEFAULT_SCORE = 4.0
 _DEFAULT_FLAT_SCORE = 4.0
 _rankings: dict[str, dict] = {}
 
-# Known pure flat sires — fallback when no rankings data loaded
+# Known pure flat sires — fallback when no rankings data loaded.
+# Primary source is the StallionGuide flat rankings (~355 sires fetched on each scrape).
+# This frozenset covers non-European sires (US, AUS, SA) that never appear in those
+# tables, plus a broad safety net for any sire the rankings miss.
 _KNOWN_FLAT_SIRES: frozenset[str] = frozenset({
+    # --- Core European flat sires (also covered by rankings, belt-and-braces) ---
     "galileo", "dubawi", "frankel", "kingman", "exceed and excel",
     "dark angel", "invincible spirit", "siyouni", "sea the stars",
     "new approach", "dansili", "pivotal", "selkirk", "shamardal",
@@ -117,6 +160,55 @@ _KNOWN_FLAT_SIRES: frozenset[str] = frozenset({
     "sea the moon", "poet's word", "crystal ocean", "ulysses",
     "time test", "saxon warrior", "waldgeist", "so you think",
     "anthony van dyck",
+    # --- European flat sires likely to appear at IRE/UK/FR sales ---
+    "palace pier", "st mark's basilica", "persian king", "blackbeard",
+    "bayside boy", "starman", "mohaather", "cracksman", "hello youmzain",
+    "torquator tasso", "footstepsinthesand", "space blues", "victor ludorum",
+    "pinatubo", "ghaiyyath", "sergei prokofiev", "persian force",
+    "minzaal", "naval crown", "sealiway", "lucky vega", "armor",
+    "soft light", "kameko", "romanised", "chachnak", "wooded",
+    "lope y fernandez", "masar", "circus maximus", "expert eye",
+    "calyx", "battleground", "mogul", "japan", "logician",
+    "stradivarius", "study of man", "telecaster", "baaeed",
+    "hukum", "bay bridge", "pyledriver", "hurricane lane",
+    "adayar", "snowfall", "mishriff", "love", "magical",
+    "sottsass", "almanzor", "earthlight", "victor ludorum",
+    "arizona", "innisfree", "wootton bassett", "blue point",
+    "havana grey", "starspangledbanner", "sioux nation", "zarak",
+    "zelzal", "dandy man", "kodi bear", "bated breath",
+    "harry angel", "shalaa", "tasleet", "gutaifan", "muhaarar",
+    "charlie hills", "massaat", "dutch art", "holy roman emperor",
+    "kyllachy", "orpen", "elusive city", "cape of good hope",
+    "gleneagles", "olympic glory", "lightning spear", "charm spirit",
+    "intello", "le havre", "manduro", "lawman", "kendargent",
+    "territories", "recoletos", "make believe", "cloth of stars",
+    "dariyan", "dalakhani", "montjeu", "singspiel", "nayef",
+    "new bay", "golden horn", "hawk wing", "danehill dancer",
+    "rock of gibraltar", "giant's causeway", "high chaparral",
+    "motivator", "authorized", "mastercraftsman", "born to sea",
+    "iffraaj", "mayson", "elarqam", "due diligence",
+    "caravaggio", "ten sovereigns", "profitable", "sands of mali",
+    "bungle inthejungle", "rumble inthejungle",
+    # --- North American flat sires (not in European rankings) ---
+    "practical joke", "into mischief", "constitution", "nyquist",
+    "gun runner", "liam's map", "upstart", "american pharoah",
+    "justify", "always dreaming", "audible", "improbable",
+    "maximum security", "authentic", "essential quality", "known agenda",
+    "medina spirit", "mandaloun", "hot rod charlie", "midnight bourbon",
+    "charge it", "jack christopher", "epicenter", "mo donegal",
+    "cyberknife", "rich strike", "pioneer of the nile",
+    "tapit", "war front", "curlin", "quality road", "medaglia d'oro",
+    "union rags", "super saver", "bodemeister", "drosselmeyer",
+    "tiz the law", "tiz way", "honor ap", "honor a. p.", "knicks go",
+    "code of honor", "maxfield", "silver state", "war of will",
+    "mckinzie", "instagrand", "runhappy", "klimt", "vekoma",
+    "candy ride", "violence", "unified", "charter oak",
+    "frosted", "mshawish", "arrogate", "california chrome",
+    "accelerate", "mind your biscuits",
+    # --- Australian / South African sires ---
+    "zoustar", "capitalist", "i am invincible", "snitzel",
+    "pierro", "lonhro", "not a single doubt", "redoute's choice",
+    "sebring", "smart missile", "street boss",
 })
 
 # ---------------------------------------------------------------------------

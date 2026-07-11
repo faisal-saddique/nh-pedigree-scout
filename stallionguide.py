@@ -1,11 +1,19 @@
 """
 Fetch leading sire rankings from api.stallionguide.com (Kendo Grid JSON API).
 
-Endpoints:
-  LeadingSiresTableJumps_Read?id={year}1  — NH GB/IRE sires
-  LeadingSiresTableJumps_Read?id={year}7  — NH France sires
-  LeadingSiresTable_Read/{year}1          — Flat Europe sires
-  LeadingSiresTable_Read?id={year}44      — NH Broodmare sires GB/IRE
+NH endpoints (LeadingSiresTableJumps_Read):
+  ?id={year}1   — NH GB/IRE sires (50)
+  ?id={year}7   — NH France sires (50)
+
+Flat endpoints (LeadingSiresTable_Read) — sale-specific IDs:
+  Each numeric suffix maps to one Goffs flat sale table for that year.
+  Suffixes 1-29 cover IRE/UK/FR flat sales (Orby, Breeze-Up, HIT, 2yo sprint sales, etc.)
+  Suffix 44 covers the flat broodmare sires table (Galileo, Dubawi, Invincible Spirit…)
+  We fetch ALL of them and keep the best (lowest) rank per sire so discipline detection
+  covers the full ~355 flat sires that appear at any Goffs flat sale.
+
+NH Broodmare endpoint (LeadingSiresTable_Read):
+  ?id={year}44  — NH Broodmares GB/IRE
 
 Year suffix = current calendar year (2026 covers 2025-26 NH season and 2026 flat year).
 """
@@ -20,6 +28,11 @@ _HEADERS = {
 }
 _BODY = b"take=200&skip=0&page=1&pageSize=200"
 
+# All flat sale suffix IDs that return data across a full year.
+# Suffixes 1-29 = individual Goffs flat sales (Orby, Breeze-Up, HIT, 2yo sprints, FR flat…)
+# Suffix 44 = flat broodmare sires (Galileo, Dubawi, Invincible Spirit…)
+_FLAT_SUFFIXES = (*range(1, 30), 44)
+
 
 def _season_year() -> int:
     today = datetime.date.today()
@@ -28,26 +41,32 @@ def _season_year() -> int:
 
 def _post(client: httpx.Client, endpoint: str, id_: str, path: bool = False) -> list[dict]:
     url = f"{_API}/{endpoint}/{id_}" if path else f"{_API}/{endpoint}?id={id_}"
-    resp = client.post(url, content=_BODY)
-    resp.raise_for_status()
-    return resp.json().get("Data", [])
+    try:
+        resp = client.post(url, content=_BODY, timeout=15)
+        resp.raise_for_status()
+        return resp.json().get("Data", [])
+    except Exception:
+        return []
 
 
 def fetch_rankings() -> dict[str, dict]:
     """
-    Fetch NH GB/IRE, NH France, Flat Europe, and NH Broodmare sire tables.
+    Fetch NH GB/IRE, NH France, ALL flat sale tables (suffixes 1-29 + 44), and NH BM sires.
     Returns {sire_name: {nh_rank, nh_winners, nh_bt_pct, nh_awd,
                          nh_fr_rank, flat_rank, flat_winners, flat_bt_pct, nh_bm_rank}}.
+
+    For flat_rank, keeps the best (lowest) rank seen across all sale tables so that a sire
+    appearing at a specialised sale (Breeze-Up, 2yo sprint) isn't missed.
     """
     year = _season_year()
     nh_ire_id = f"{year}1"   # NH GB/IRE
     nh_fr_id  = f"{year}7"   # NH France
-    flat_id   = f"{year}1"   # Flat Europe
     bm_id     = f"{year}44"  # NH Broodmares GB/IRE
 
     combined: dict[str, dict] = {}
 
     with httpx.Client(headers=_HEADERS, timeout=30) as client:
+        # NH GB/IRE
         for row in _post(client, "LeadingSiresTableJumps_Read", nh_ire_id):
             name = row["Sire"].strip()
             combined.setdefault(name, {}).update({
@@ -57,18 +76,26 @@ def fetch_rankings() -> dict[str, dict]:
                 "nh_awd": row.get("AverageWinningDistance", 0.0),
             })
 
+        # NH France
         for row in _post(client, "LeadingSiresTableJumps_Read", nh_fr_id):
             name = row["Sire"].strip()
             combined.setdefault(name, {})["nh_fr_rank"] = row["Rank"]
 
-        for row in _post(client, "LeadingSiresTable_Read", flat_id, path=True):
-            name = row["Sire"].strip()
-            combined.setdefault(name, {}).update({
-                "flat_rank": row["Rank"],
-                "flat_winners": row["Winners"],
-                "flat_bt_pct": row.get("BTWinnersToRunnersPer", 0.0),
-            })
+        # Flat — all sale-specific tables, keep best rank per sire
+        for suffix in _FLAT_SUFFIXES:
+            flat_id = f"{year}{suffix}"
+            for row in _post(client, "LeadingSiresTable_Read", flat_id):
+                name = row["Sire"].strip()
+                existing_rank = combined.get(name, {}).get("flat_rank")
+                new_rank = row["Rank"]
+                if existing_rank is None or new_rank < existing_rank:
+                    combined.setdefault(name, {}).update({
+                        "flat_rank": new_rank,
+                        "flat_winners": row["Winners"],
+                        "flat_bt_pct": row.get("BTWinnersToRunnersPer", 0.0),
+                    })
 
+        # NH Broodmare sires
         for row in _post(client, "LeadingSiresTable_Read", bm_id):
             name = row["Sire"].strip()
             combined.setdefault(name, {})["nh_bm_rank"] = row["Rank"]

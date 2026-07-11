@@ -250,21 +250,29 @@ if run_btn and catalogue_url:
                 pdf_status.update(label=label, state="complete")
             pdf_progress.progress(1.0, text="Dam records complete")
 
+    # Detect sale type from URL for tailored AI prompt and comparables filtering
+    _url_lower = catalogue_url.lower()
+    if any(p in _url_lower for p in ("breeze-up", "breezeup", "breeze_up")):
+        _sale_type = "breeze_up"
+    else:
+        _sale_type = "standard"
+
     # AI analysis
     unanalysed = get_unanalysed_lots(st.session_state.current_sale_id)
     if unanalysed:
-        # Attach historical comparables per sire (cached by sire name for the batch)
+        # Attach historical comparables per sire, filtered by sale type
         _comp_cache: dict = {}
         for lot in unanalysed:
             sire = lot.get("sire") or ""
             if sire not in _comp_cache:
-                _comp_cache[sire] = get_sire_comparables(sire)
+                _comp_cache[sire] = get_sire_comparables(sire, sale_type=_sale_type)
             lot["historical_comps"] = _comp_cache[sire]
 
         batch_size = int(os.getenv("LLM_BATCH_SIZE", "10"))
         model = os.getenv("LLM_MODEL", "google:gemini-2.5-flash")
         n_batches = -(-len(unanalysed) // batch_size)  # ceiling division
-        progress = st.progress(0, text=f"Analysing {len(unanalysed)} lots in {n_batches} batches via {model}...")
+        sale_type_label = " (Breeze-Up mode)" if _sale_type == "breeze_up" else ""
+        progress = st.progress(0, text=f"Analysing {len(unanalysed)} lots in {n_batches} batches via {model}{sale_type_label}...")
 
         with st.status(f"Analysing lots...", expanded=True) as status:
             lot_map = {l["lot_number"]: l["id"] for l in unanalysed}
@@ -285,7 +293,7 @@ if run_btn and catalogue_url:
                 st.write(f"Batch done — {done}/{total} lots analysed")
 
             try:
-                results = analyse_lots(unanalysed, on_batch=on_batch)
+                results = analyse_lots(unanalysed, on_batch=on_batch, sale_type=_sale_type)
                 for lot_number, result in results.items():
                     lot_id = lot_map.get(lot_number)
                     if lot_id:

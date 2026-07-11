@@ -42,6 +42,45 @@ Cons: [1-2 key risks or negatives]
 Est. Price: £[low]-£[high]
 """.strip()
 
+# Breeze-Up sales are pre-trained 2-year-olds, not yearlings or store horses.
+# They command a 5-15x premium over the same sire's yearling price.
+# Historical comparable data in the system comes from yearling sales (Orby, HIT) and will
+# UNDERESTIMATE breeze-up hammer prices. Ignore those comparables for price calibration.
+_BREEZE_UP_SYSTEM_PROMPT = """
+You are an expert bloodstock advisor specialising in breeze-up sales at Goffs and Tattersalls.
+
+These lots are PRE-TRAINED 2-YEAR-OLDS that have undergone professional breaking and early
+conditioning. They are NOT yearlings or store horses. Breeze-up prices command a substantial
+training premium — typically 5-15x what the same sire's unbroken yearling would fetch at a
+yearling sale. Any historical comparable data shown reflects yearling sale prices and will
+significantly underestimate breeze-up hammer prices; use it only as a very rough directional
+signal, not as a price anchor.
+
+Each lot is tagged [NH] or [FLAT]. At a breeze-up sale nearly all lots will be [FLAT].
+
+For [FLAT] lots:
+- Assess the sire's speed/precocity profile (2yo winners, sprint-classic distances)
+- Consider the dam line for early maturity, turf speed and 2yo winning ability
+- Factor in sex (colts carry stud premium at breeze-up; fillies slightly softer market)
+- The breeze-up market is driven by precocity, physique and the gallop (you don't see it, but factor in that buyers will have watched the horse move)
+- Estimate sale price in GBP. Typical range at Goffs Classic Breeze-Up: £15,000–£600,000
+  - Budget lots (unfashionable sire, moderate dam line): £15,000–£40,000
+  - Mid-market (solid sire, decent dam line): £40,000–£120,000
+  - Top lots (elite sire, strong family): £120,000–£400,000+
+  - Outstanding (Frankel, Wootton Bassett, Palace Pier, top families): £250,000–£600,000+
+
+For [NH] lots (rare at breeze-up):
+- Estimate sale price in GBP for the NH store market (typical range £5,000–£40,000)
+
+The pedigree score (0–100) is a quantitative flat sire index.
+Be concise and practical, as if advising a buyer at the ring.
+
+Format your summary exactly as:
+Pros: [1-2 key positives]
+Cons: [1-2 key risks or negatives]
+Est. Price: £[low]-£[high]
+""".strip()
+
 
 class LotResult(BaseModel):
     lot_number: str = Field(description="Lot number exactly as provided")
@@ -54,6 +93,7 @@ class BatchResult(BaseModel):
 
 
 _batch_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_SYSTEM_PROMPT)
+_breeze_up_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_BREEZE_UP_SYSTEM_PROMPT)
 
 
 def _dam_summary(dam_records) -> str:
@@ -117,14 +157,15 @@ def _lot_block(lot: dict) -> str:
     )
 
 
-def analyse_batch(lots: list[dict]) -> list[LotResult]:
+def analyse_batch(lots: list[dict], sale_type: str = "standard") -> list[LotResult]:
     """Analyse a batch of lots in one LLM call. Returns results in same order as input."""
+    agent = _breeze_up_agent if sale_type == "breeze_up" else _batch_agent
     prompt = (
         f"Analyse these {len(lots)} sale lots (each tagged [NH] or [FLAT] — use the right criteria for each). "
         "For each, provide lot_number (exact), estimated_price_gbp, and summary.\n\n"
         + "\n".join(_lot_block(l) for l in lots)
     )
-    result = _batch_agent.run_sync(prompt)
+    result = agent.run_sync(prompt)
     # Normalise lot_number — model sometimes returns "Lot 756" instead of "756"
     for r in result.output.results:
         r.lot_number = r.lot_number.strip().removeprefix("Lot").strip()
@@ -136,9 +177,14 @@ def analyse_batch(lots: list[dict]) -> list[LotResult]:
 _BATCH_DELAY = 4.0  # seconds between batches — respect 15 RPM free tier
 
 
-def analyse_lots(lots: list[dict], on_batch: Callable[[int, int], None] | None = None) -> dict[str, LotResult]:
+def analyse_lots(
+    lots: list[dict],
+    on_batch: Callable[[int, int], None] | None = None,
+    sale_type: str = "standard",
+) -> dict[str, LotResult]:
     """
     Analyse all lots in batches of LLM_BATCH_SIZE.
+    sale_type: 'breeze_up' uses the breeze-up specialist prompt; anything else uses standard.
     Calls on_batch(done, total) after each batch for progress updates.
     Returns {lot_number: LotResult}.
     """
@@ -146,7 +192,7 @@ def analyse_lots(lots: list[dict], on_batch: Callable[[int, int], None] | None =
     chunks = [lots[i: i + _BATCH_SIZE] for i in range(0, len(lots), _BATCH_SIZE)]
     done = 0
     for i, chunk in enumerate(chunks):
-        batch_results = analyse_batch(chunk)
+        batch_results = analyse_batch(chunk, sale_type=sale_type)
         for r in batch_results:
             results[r.lot_number] = r
         done += len(chunk)

@@ -18,7 +18,7 @@ NH Broodmare endpoint (LeadingSiresTable_Read):
 Year suffix = current calendar year (2026 covers 2025-26 NH season and 2026 flat year).
 """
 import datetime
-import httpx
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _API = "https://api.stallionguide.com/data"
@@ -27,7 +27,7 @@ _HEADERS = {
     "Referer": "https://www.stallionguide.com/leading-sires/",
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
 }
-_BODY = b"take=200&skip=0&page=1&pageSize=200"
+_BODY = "take=200&skip=0&page=1&pageSize=200"
 
 # All flat sale suffix IDs that return data across a full year.
 # Suffixes 1-29 = individual Goffs flat sales (Orby, Breeze-Up, HIT, 2yo sprints, FR flat…)
@@ -40,10 +40,10 @@ def _season_year() -> int:
     return today.year
 
 
-def _post(client: httpx.Client, endpoint: str, id_: str, path: bool = False) -> list[dict]:
-    url = f"{_API}/{endpoint}/{id_}" if path else f"{_API}/{endpoint}?id={id_}"
+def _get(endpoint: str, id_: str) -> list[dict]:
+    url = f"{_API}/{endpoint}?id={id_}"
     try:
-        resp = client.post(url, content=_BODY, timeout=15)
+        resp = requests.post(url, data=_BODY, headers=_HEADERS, timeout=15)
         resp.raise_for_status()
         return resp.json().get("Data", [])
     except Exception:
@@ -66,44 +66,51 @@ def fetch_rankings() -> dict[str, dict]:
 
     combined: dict[str, dict] = {}
 
-    with httpx.Client(headers=_HEADERS, timeout=30) as client:
-        # NH GB/IRE
-        for row in _post(client, "LeadingSiresTableJumps_Read", nh_ire_id):
-            name = row["Sire"].strip()
-            combined.setdefault(name, {}).update({
-                "nh_rank": row["Rank"],
-                "nh_winners": row["Winners"],
-                "nh_bt_pct": row.get("BTWinnersToRunnersPer", 0.0),
-                "nh_awd": row.get("AverageWinningDistance", 0.0),
-            })
+    # NH GB/IRE
+    for row in _get("LeadingSiresTableJumps_Read", nh_ire_id):
+        name = row["Sire"].strip()
+        combined.setdefault(name, {}).update({
+            "nh_rank": row["Rank"],
+            "nh_winners": row["Winners"],
+            "nh_bt_pct": row.get("BTWinnersToRunnersPer", 0.0),
+            "nh_awd": row.get("AverageWinningDistance", 0.0),
+        })
 
-        # NH France
-        for row in _post(client, "LeadingSiresTableJumps_Read", nh_fr_id):
-            name = row["Sire"].strip()
-            combined.setdefault(name, {})["nh_fr_rank"] = row["Rank"]
+    # NH France
+    for row in _get("LeadingSiresTableJumps_Read", nh_fr_id):
+        name = row["Sire"].strip()
+        combined.setdefault(name, {})["nh_fr_rank"] = row["Rank"]
 
-        # Flat — fetch all sale-specific tables in parallel, keep best rank per sire
-        def _fetch_flat(suffix: int) -> list[dict]:
-            flat_id = f"{year}{suffix}"
-            return _post(client, "LeadingSiresTable_Read", flat_id)
+    # Flat — fetch all sale-specific tables in parallel.
+    # Each thread uses its own requests.Session to avoid any shared-state issues.
+    def _fetch_flat(suffix: int) -> list[dict]:
+        flat_id = f"{year}{suffix}"
+        url = f"{_API}/LeadingSiresTable_Read?id={flat_id}"
+        try:
+            with requests.Session() as s:
+                resp = s.post(url, data=_BODY, headers=_HEADERS, timeout=12)
+                resp.raise_for_status()
+                return resp.json().get("Data", [])
+        except Exception:
+            return []
 
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            futures = {pool.submit(_fetch_flat, s): s for s in _FLAT_SUFFIXES}
-            for future in as_completed(futures):
-                for row in future.result():
-                    name = row["Sire"].strip()
-                    existing_rank = combined.get(name, {}).get("flat_rank")
-                    new_rank = row["Rank"]
-                    if existing_rank is None or new_rank < existing_rank:
-                        combined.setdefault(name, {}).update({
-                            "flat_rank": new_rank,
-                            "flat_winners": row["Winners"],
-                            "flat_bt_pct": row.get("BTWinnersToRunnersPer", 0.0),
-                        })
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(_fetch_flat, s): s for s in _FLAT_SUFFIXES}
+        for future in as_completed(futures):
+            for row in future.result():
+                name = row["Sire"].strip()
+                existing_rank = combined.get(name, {}).get("flat_rank")
+                new_rank = row["Rank"]
+                if existing_rank is None or new_rank < existing_rank:
+                    combined.setdefault(name, {}).update({
+                        "flat_rank": new_rank,
+                        "flat_winners": row["Winners"],
+                        "flat_bt_pct": row.get("BTWinnersToRunnersPer", 0.0),
+                    })
 
-        # NH Broodmare sires
-        for row in _post(client, "LeadingSiresTable_Read", bm_id):
-            name = row["Sire"].strip()
-            combined.setdefault(name, {})["nh_bm_rank"] = row["Rank"]
+    # NH Broodmare sires
+    for row in _get("LeadingSiresTable_Read", bm_id):
+        name = row["Sire"].strip()
+        combined.setdefault(name, {})["nh_bm_rank"] = row["Rank"]
 
     return combined

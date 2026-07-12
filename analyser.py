@@ -146,7 +146,7 @@ def _lot_block(lot: dict) -> str:
     dam_line = _dam_summary(lot.get("dam_records"))
     comp_line = _comp_summary(lot.get("historical_comps"))
     return (
-        f"[{lot.get('discipline', 'nh').upper()}] "
+        f"[{(lot.get('discipline') or 'nh').upper()}] "
         f"Lot {lot['lot_number']}: {lot.get('horse_name') or 'Unnamed'} | "
         f"YOB: {lot.get('year_of_birth') or '?'} | Sex: {lot.get('sex') or '?'} | "
         f"Sire: {lot.get('sire') or '?'} | Dam: {lot.get('dam') or '?'} | "
@@ -192,7 +192,20 @@ def analyse_lots(
     chunks = [lots[i: i + _BATCH_SIZE] for i in range(0, len(lots), _BATCH_SIZE)]
     done = 0
     for i, chunk in enumerate(chunks):
-        batch_results = analyse_batch(chunk, sale_type=sale_type)
+        try:
+            batch_results = analyse_batch(chunk, sale_type=sale_type)
+        except Exception:
+            # Retry once with half-sized sub-batches before giving up
+            mid = len(chunk) // 2
+            sub_chunks = [chunk[:mid], chunk[mid:]] if mid else [chunk]
+            batch_results = []
+            for sub in sub_chunks:
+                if not sub:
+                    continue
+                try:
+                    batch_results.extend(analyse_batch(sub, sale_type=sale_type))
+                except Exception:
+                    pass  # skip un-parseable sub-batch rather than crash entire run
         for r in batch_results:
             results[r.lot_number] = r
         done += len(chunk)

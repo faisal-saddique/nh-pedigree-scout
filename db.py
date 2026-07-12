@@ -65,7 +65,10 @@ CREATE TABLE IF NOT EXISTS historical_lots (
 
 
 def _conn():
-    return psycopg2.connect(os.environ["DATABASE_URL"])
+    return psycopg2.connect(
+        os.environ["DATABASE_URL"],
+        options="-c idle_in_transaction_session_timeout=30000",
+    )
 
 
 def init_db() -> None:

@@ -81,6 +81,8 @@ def init_db() -> None:
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS pdf_url TEXT")
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS pdf_scraped_at TIMESTAMP")
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS discipline TEXT DEFAULT 'nh'")
+        cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS trainer TEXT")
+        cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS lot_type TEXT")
 
 
 def upsert_sale(url: str, name: str) -> int:

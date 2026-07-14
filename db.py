@@ -83,6 +83,7 @@ def init_db() -> None:
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS discipline TEXT DEFAULT 'nh'")
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS trainer TEXT")
         cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS lot_type TEXT")
+        cur.execute("ALTER TABLE lots ADD COLUMN IF NOT EXISTS form_notes TEXT")
 
 
 def upsert_sale(url: str, name: str) -> int:
@@ -363,6 +364,24 @@ def get_sire_comparables(sire_name: str, sale_type: str = "standard") -> dict | 
                 if result:
                     return result
                 return _query("", ())
+
+
+def update_lot_form_notes(lot_id: int, form_notes: str) -> None:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE lots SET form_notes = %s WHERE id = %s",
+            (form_notes, lot_id),
+        )
+
+
+def get_lots_without_form_notes(sale_id: int) -> list[dict]:
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM lots WHERE sale_id = %s AND form_notes IS NULL ORDER BY NULLIF(regexp_replace(lot_number, '[^0-9]', '', 'g'), '')::INT NULLS LAST, lot_number",
+                (sale_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
 
 
 def get_historical_sales() -> list[dict]:

@@ -108,6 +108,68 @@ def fetch_lot_pdf_text(lot_url: str, scrapedo_token: str | None = None) -> tuple
     return pdf_url, text
 
 
+def _parse_catalogueUpdates(html: str) -> str | None:
+    """Extract all Catalogue Updates text from a Tattersalls Entry/Lot page."""
+    soup = BeautifulSoup(html, "lxml")
+    updates = soup.find_all("div", class_="catalogueUpdate")
+    if not updates:
+        return None
+    parts = []
+    for div in updates:
+        date_span = div.find("span", class_="catalogueUpdateDate")
+        if date_span:
+            date_span.decompose()
+        text = div.get_text(" ", strip=True).strip()
+        if text:
+            parts.append(text)
+    return " | ".join(parts) if parts else None
+
+
+def fetch_hit_entry_form(tld: str, sale_code: str, lot_number: str) -> str | None:
+    """
+    Fetch /4DCGI/Entry/Lot/{sale_code}/{lot_number} and extract all Catalogue
+    Updates text: form summary, wins, BHA rating, recent run.
+    Requires 4D session cookie — seeds session via shell page first.
+    Returns concatenated text or None if no updates found.
+    """
+    base = f"https://secure.tattersalls.{tld}"
+    shell_url = f"{base}/4DCGI/Sale/{sale_code}/Main/Lots"
+    entry_url = f"{base}/4DCGI/Entry/Lot/{sale_code}/{lot_number}"
+    try:
+        with httpx.Client(headers=_HEADERS, follow_redirects=True, timeout=20) as client:
+            client.get(shell_url)
+            r = client.get(entry_url)
+            r.raise_for_status()
+        return _parse_catalogueUpdates(r.text)
+    except Exception:
+        return None
+
+
+def fetch_hit_form_batch(
+    tld: str, sale_code: str, lots: list[dict], max_workers: int = 8
+) -> dict[int, str]:
+    """
+    Parallel-fetch Catalogue Updates for all HIT lots.
+    Returns {lot_id: form_notes} for lots that have catalogue updates.
+    Each thread seeds its own 4D session.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    results: dict[int, str] = {}
+
+    def _fetch_one(lot: dict) -> tuple[int, str | None]:
+        return lot["id"], fetch_hit_entry_form(tld, sale_code, lot["lot_number"])
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_fetch_one, lot): lot for lot in lots}
+        for future in as_completed(futures):
+            lot_id, form = future.result()
+            if form:
+                results[lot_id] = form
+
+    return results
+
+
 def detect_site(url: str) -> str:
     if "tattersalls.com" in url or "tattersalls.ie" in url:
         return "tattersalls"

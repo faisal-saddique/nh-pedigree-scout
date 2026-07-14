@@ -198,6 +198,9 @@ def _lot_block(lot: dict, sale_type: str = "standard") -> str:
         f"Sire: {lot.get('sire') or '?'} | Dam: {lot.get('dam') or '?'} | "
     )
     if sale_type == "hit":
+        form_notes = lot.get("form_notes")
+        if form_notes:
+            block += f"Form: {form_notes} | "
         if trainer:
             block += f"Trainer: {trainer} | "
         block += f"Sire pedigree score (secondary signal): {lot.get('pedigree_score', 0):.1f}/100"

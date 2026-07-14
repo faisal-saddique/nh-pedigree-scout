@@ -12,6 +12,7 @@ from db import (
     get_historical_sales,
     get_lots_df,
     delete_sale,
+    get_lots_without_form_notes,
     get_lots_without_pdf,
     get_sales,
     get_sire_comparables,
@@ -21,13 +22,14 @@ from db import (
     init_db,
     toggle_favourite,
     update_lot_analysis,
+    update_lot_form_notes,
     update_lot_pdf_data,
     upsert_historical_lots,
     upsert_lots,
     upsert_sale,
     upsert_sire_rankings,
 )
-from scraper import detect_site, fetch_lot_pdf_text, scrape_catalogue, scrape_goffs, scrape_tattersalls
+from scraper import _SALE_CODE_RE, detect_site, fetch_hit_form_batch, fetch_lot_pdf_text, scrape_catalogue, scrape_goffs, scrape_tattersalls
 from stallionguide import fetch_rankings
 from pdf_parser import parse_pedigree_pdf_text, score_dam_production
 
@@ -249,6 +251,28 @@ if run_btn and catalogue_url:
                     label += f", {failed_pdf} skipped (withdrawn/no PDF)"
                 pdf_status.update(label=label, state="complete")
             pdf_progress.progress(1.0, text="Dam records complete")
+
+    # HIT form data enrichment (Tattersalls only — /4DCGI/Entry/Lot pages)
+    _url_lower_pre = catalogue_url.lower()
+    _is_hit = any(p in _url_lower_pre for p in ("horses-in-training", "horses_in_training", "hit-sale", "/ght", "/aht", "/mht"))
+    if _is_hit and "tattersalls" in _url_lower_pre:
+        _m = _SALE_CODE_RE.search(catalogue_url)
+        if _m:
+            _hit_tld = "ie" if "tattersalls.ie" in catalogue_url else "com"
+            _hit_sale_code = _m.group(1).upper()
+            _pending_form = get_lots_without_form_notes(st.session_state.current_sale_id)
+            if _pending_form:
+                _n_form = len(_pending_form)
+                _form_prog = st.progress(0, text=f"Fetching race form for {_n_form} lots from Tattersalls...")
+                with st.status("Fetching race form from Tattersalls lot pages...", expanded=True) as _form_status:
+                    _form_results = fetch_hit_form_batch(_hit_tld, _hit_sale_code, _pending_form)
+                    for _lot_id, _form_notes in _form_results.items():
+                        update_lot_form_notes(_lot_id, _form_notes)
+                    _form_prog.progress(1.0, text="Race form complete")
+                    _form_status.update(
+                        label=f"Race form fetched — {len(_form_results)}/{_n_form} lots enriched",
+                        state="complete",
+                    )
 
     # Detect sale type from URL for tailored AI prompt and comparables filtering
     _url_lower = catalogue_url.lower()

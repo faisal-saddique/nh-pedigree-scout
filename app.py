@@ -254,6 +254,8 @@ if run_btn and catalogue_url:
     _url_lower = catalogue_url.lower()
     if any(p in _url_lower for p in ("breeze-up", "breezeup", "breeze_up")):
         _sale_type = "breeze_up"
+    elif any(p in _url_lower for p in ("horses-in-training", "horses_in_training", "hit-sale", "/ght", "/aht", "/mht")):
+        _sale_type = "hit"
     else:
         _sale_type = "standard"
 
@@ -271,7 +273,7 @@ if run_btn and catalogue_url:
         batch_size = int(os.getenv("LLM_BATCH_SIZE", "10"))
         model = os.getenv("LLM_MODEL", "google:gemini-2.5-flash")
         n_batches = -(-len(unanalysed) // batch_size)  # ceiling division
-        sale_type_label = " (Breeze-Up mode)" if _sale_type == "breeze_up" else ""
+        sale_type_label = " (Breeze-Up mode)" if _sale_type == "breeze_up" else " (HIT mode)" if _sale_type == "hit" else ""
         progress = st.progress(0, text=f"Analysing {len(unanalysed)} lots in {n_batches} batches via {model}{sale_type_label}...")
 
         with st.status(f"Analysing lots...", expanded=True) as status:

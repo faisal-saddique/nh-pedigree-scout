@@ -399,6 +399,20 @@ def _parse_tattersalls_row(row, fallback_yob: int | None = None, currency: str =
     sex_m = _COLOR_SEX_RE.search(tdh_text)
     sex = _T_SEX_MAP.get(sex_m.group(1)) if sex_m else None
 
+    # Lot type (HIT / HOT / P2P etc.) from <span class="ht"> inside tdh
+    ht_span = tdh.find("span", class_="ht")
+    lot_type = ht_span.get_text(strip=True) if ht_span else None
+
+    # Trainer — 4th td (index 3) in named-horse rows; absent in yearling/store rows
+    all_tds = row.find_all("td")
+    trainer = None
+    if len(hn_tags) == 1 and len(all_tds) >= 4:
+        # col2type td may or may not be present; find trainer by position after lot+tdh+type
+        # Columns: lot(0) | tdh(1) | col2type(2) | trainer(3) | vendor/buyer(4) | price(5)
+        trainer_td = all_tds[3] if len(all_tds) > 3 else None
+        if trainer_td and trainer_td.get("class", []) not in [["lot"], ["price"]]:
+            trainer = trainer_td.get_text(strip=True) or None
+
     # Price and outcome — only present on completed sales (td class="price" exists)
     price = None
     outcome = None
@@ -407,8 +421,6 @@ def _parse_tattersalls_row(row, fallback_yob: int | None = None, currency: str =
     if price_td:
         price_text = price_td.get_text(strip=True).replace(",", "").replace(".", "")
         price = int(price_text) if price_text.isdigit() else None
-        # Purchaser is the td immediately before td.price
-        all_tds = row.find_all("td")
         price_idx = all_tds.index(price_td)
         if price_idx >= 1:
             purchaser_text = all_tds[price_idx - 1].get_text(strip=True)
@@ -434,6 +446,8 @@ def _parse_tattersalls_row(row, fallback_yob: int | None = None, currency: str =
         "second_dam_sire": None,
         "discipline": discipline,
         "pedigree_score": score_lot_for_discipline(sire, None, None, discipline),
+        "lot_type": lot_type,
+        "trainer": trainer,
         "price": price,
         "currency": currency,
         "outcome": outcome,

@@ -105,10 +105,12 @@ def upsert_lots(sale_id: int, lots: list[dict]) -> None:
                 """
                 INSERT INTO lots (
                     sale_id, lot_number, horse_name, year_of_birth, sex,
-                    sire, dam, dam_sire, second_dam_sire, pedigree_score, discipline
+                    sire, dam, dam_sire, second_dam_sire, pedigree_score, discipline,
+                    trainer, lot_type
                 ) VALUES (
                     %(sale_id)s, %(lot_number)s, %(horse_name)s, %(year_of_birth)s, %(sex)s,
-                    %(sire)s, %(dam)s, %(dam_sire)s, %(second_dam_sire)s, %(pedigree_score)s, %(discipline)s
+                    %(sire)s, %(dam)s, %(dam_sire)s, %(second_dam_sire)s, %(pedigree_score)s, %(discipline)s,
+                    %(trainer)s, %(lot_type)s
                 )
                 ON CONFLICT (sale_id, lot_number) DO UPDATE SET
                     horse_name      = EXCLUDED.horse_name,
@@ -119,9 +121,11 @@ def upsert_lots(sale_id: int, lots: list[dict]) -> None:
                     dam_sire        = EXCLUDED.dam_sire,
                     second_dam_sire = EXCLUDED.second_dam_sire,
                     pedigree_score  = EXCLUDED.pedigree_score,
-                    discipline      = EXCLUDED.discipline
+                    discipline      = EXCLUDED.discipline,
+                    trainer         = EXCLUDED.trainer,
+                    lot_type        = EXCLUDED.lot_type
                 """,
-                {"discipline": "nh", **lot, "sale_id": sale_id},
+                {"discipline": "nh", "trainer": None, "lot_type": None, **lot, "sale_id": sale_id},
             )
 
 
@@ -273,6 +277,14 @@ _BREEZE_UP_SALE_PATTERNS = (
     "breezeup",
 )
 
+_HIT_SALE_PATTERNS = (
+    "horses in training",
+    "horses-in-training",
+    "hit sale",
+    "guineas hit",
+    "autumn hit",
+)
+
 
 def get_sire_comparables(sire_name: str, sale_type: str = "standard") -> dict | None:
     """
@@ -281,6 +293,8 @@ def get_sire_comparables(sire_name: str, sale_type: str = "standard") -> dict | 
 
     sale_type='breeze_up': restrict to breeze-up historical sales only.
       Falls back to all sales if fewer than 3 breeze-up data points exist.
+    sale_type='hit': restrict to HIT sales only.
+      Falls back to all non-breeze-up sales if fewer than 3 HIT data points.
     sale_type='standard': exclude breeze-up sales so yearling/store prices
       aren't inflated by breeze-up premiums.
     """
@@ -314,26 +328,38 @@ def get_sire_comparables(sire_name: str, sale_type: str = "standard") -> dict | 
                 return dict(row) if row and row["count"] >= 3 else None
 
             if sale_type == "breeze_up":
-                # First try breeze-up sales only
                 pattern_cond = " AND (" + " OR ".join(
-                    f"LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS
+                    "LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS
                 ) + ")"
                 params = tuple(f"%{p}%" for p in _BREEZE_UP_SALE_PATTERNS)
                 result = _query(pattern_cond, params)
                 if result:
                     return result
-                # Fall back to all sales (with note) if < 3 breeze-up data points
                 return _query("", ())
+            elif sale_type == "hit":
+                # HIT-only comps first — avoids yearling price anchoring
+                hit_cond = " AND (" + " OR ".join(
+                    "LOWER(sale_name) LIKE %s" for _ in _HIT_SALE_PATTERNS
+                ) + ")"
+                params = tuple(f"%{p}%" for p in _HIT_SALE_PATTERNS)
+                result = _query(hit_cond, params)
+                if result:
+                    return result
+                # Fallback: all non-breeze-up sales (still better than yearling-only)
+                excl_cond = " AND NOT (" + " OR ".join(
+                    "LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS
+                ) + ")"
+                params = tuple(f"%{p}%" for p in _BREEZE_UP_SALE_PATTERNS)
+                return _query(excl_cond, params)
             else:
                 # Standard: exclude breeze-up inflated prices
                 excl_cond = " AND NOT (" + " OR ".join(
-                    f"LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS
+                    "LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS
                 ) + ")"
                 params = tuple(f"%{p}%" for p in _BREEZE_UP_SALE_PATTERNS)
                 result = _query(excl_cond, params)
                 if result:
                     return result
-                # Fall back to all sales if no non-breeze-up data
                 return _query("", ())
 
 

@@ -92,8 +92,51 @@ class BatchResult(BaseModel):
     results: list[LotResult]
 
 
+_HIT_SYSTEM_PROMPT = """
+You are an expert bloodstock advisor specialising in Horses In Training (HIT) sales at Tattersalls,
+Goffs and Tattersalls Ireland.
+
+CRITICAL: These are TRAINED HORSES that have already raced or been prepared for racing. They are
+NOT yearlings or store horses. Pricing is driven almost entirely by race record, not pedigree.
+
+Pricing hierarchy (most to least important):
+1. Race record — wins, placings, class of races, earnings. A horse with 3 wins at a decent level
+   is worth far more than an unraced horse by Frankel. A horse by a cheap sire that won a Listed
+   race commands a major premium over an elite-sired horse with nothing on the clock.
+2. Age and soundness — younger horses with potential command more; older horses with problems
+   are heavily discounted.
+3. Trainer — a horse from a top trainer (Aidan O'Brien, John Gosden, William Haggas etc.) signals
+   quality even if form figures are modest.
+4. Pedigree — secondary only. A famous sire adds modest premium but does not overcome a poor
+   race record. An unfashionable sire does not prevent a horse with a strong record from selling well.
+
+IMPORTANT: Any historical comparable prices shown reflect YEARLING sale prices, NOT HIT sale prices.
+A Frankel yearling may fetch £500,000; a Frankel horse in training with poor form may fetch £3,000.
+Ignore the comparable prices as a price anchor — use them only as a distant signal.
+
+The pedigree score (0–100) is a sire quality index and is a WEAK signal at HIT sales. Do not let
+it dominate your estimate.
+
+Typical price ranges at a Tattersalls Guineas HIT Sale:
+- Most lots (average form, unfashionable connections): £1,000–£10,000
+- Decent form or top trainer: £10,000–£40,000
+- Multiple winners or Listed/Group class: £40,000–£100,000+
+- Elite proven performers: £80,000–£200,000+
+
+Each lot is tagged [HIT] or [FLAT] (by discipline based on sire) but this is less meaningful
+than usual — focus on the horse's own record, not the sire's racing category.
+
+Lot description includes trainer where known — factor this in.
+
+Format your summary exactly as:
+Pros: [1-2 key positives]
+Cons: [1-2 key risks or negatives]
+Est. Price: £[low]-£[high]
+""".strip()
+
 _batch_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_SYSTEM_PROMPT)
 _breeze_up_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_BREEZE_UP_SYSTEM_PROMPT)
+_hit_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_HIT_SYSTEM_PROMPT)
 
 
 def _dam_summary(dam_records) -> str:
@@ -142,28 +185,46 @@ def _comp_summary(comps: dict | None) -> str:
     return f"sire median {sym}{median:,} (range {sym}{lo:,}–{sym}{hi:,}, N={n} sold, from: {sales})"
 
 
-def _lot_block(lot: dict) -> str:
+def _lot_block(lot: dict, sale_type: str = "standard") -> str:
     dam_line = _dam_summary(lot.get("dam_records"))
     comp_line = _comp_summary(lot.get("historical_comps"))
-    return (
-        f"[{(lot.get('discipline') or 'nh').upper()}] "
+    trainer = lot.get("trainer")
+    lot_type = lot.get("lot_type")
+    tag = (lot_type or (lot.get('discipline') or 'nh')).upper()
+    block = (
+        f"[{tag}] "
         f"Lot {lot['lot_number']}: {lot.get('horse_name') or 'Unnamed'} | "
         f"YOB: {lot.get('year_of_birth') or '?'} | Sex: {lot.get('sex') or '?'} | "
         f"Sire: {lot.get('sire') or '?'} | Dam: {lot.get('dam') or '?'} | "
-        f"Dam's sire: {lot.get('dam_sire') or '?'} | "
-        f"Pedigree score: {lot.get('pedigree_score', 0):.1f}/100"
-        + (f" | Dam lines: {dam_line}" if dam_line else "")
-        + (f" | Historical prices: {comp_line}" if comp_line else "")
     )
+    if sale_type == "hit":
+        if trainer:
+            block += f"Trainer: {trainer} | "
+        block += f"Sire pedigree score (secondary signal): {lot.get('pedigree_score', 0):.1f}/100"
+    else:
+        block += (
+            f"Dam's sire: {lot.get('dam_sire') or '?'} | "
+            f"Pedigree score: {lot.get('pedigree_score', 0):.1f}/100"
+        )
+    if dam_line:
+        block += f" | Dam lines: {dam_line}"
+    if comp_line:
+        block += f" | Historical prices: {comp_line}"
+    return block
 
 
 def analyse_batch(lots: list[dict], sale_type: str = "standard") -> list[LotResult]:
     """Analyse a batch of lots in one LLM call. Returns results in same order as input."""
-    agent = _breeze_up_agent if sale_type == "breeze_up" else _batch_agent
+    if sale_type == "breeze_up":
+        agent = _breeze_up_agent
+    elif sale_type == "hit":
+        agent = _hit_agent
+    else:
+        agent = _batch_agent
     prompt = (
-        f"Analyse these {len(lots)} sale lots (each tagged [NH] or [FLAT] — use the right criteria for each). "
+        f"Analyse these {len(lots)} sale lots. "
         "For each, provide lot_number (exact), estimated_price_gbp, and summary.\n\n"
-        + "\n".join(_lot_block(l) for l in lots)
+        + "\n".join(_lot_block(l, sale_type=sale_type) for l in lots)
     )
     result = agent.run_sync(prompt)
     # Normalise lot_number — model sometimes returns "Lot 756" instead of "756"

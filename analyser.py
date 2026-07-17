@@ -117,14 +117,31 @@ Ignore the comparable prices as a price anchor — use them only as a distant si
 The pedigree score (0–100) is a sire quality index and is a WEAK signal at HIT sales. Do not let
 it dominate your estimate.
 
-Typical price ranges at a Tattersalls Guineas HIT Sale:
-- Most lots (average form, unfashionable connections): £1,000–£10,000
-- Decent form or top trainer: £10,000–£40,000
-- Multiple winners or Listed/Group class: £40,000–£100,000+
-- Elite proven performers: £80,000–£200,000+
+Price calibration for Tattersalls Guineas HIT Sale (GBP):
+- No form / withdrawn / unplaced every run: £1,000–£5,000
+- Placed once or twice in low class (Class 5–6): £3,000–£8,000
+- 1 win in Class 5–6 or BHA rating 60–70: £8,000–£18,000
+- 1–2 wins in Class 3–4 or BHA 70–78: £15,000–£35,000
+- 3+ wins at any level or BHA 78–85, or 1–2 wins from very few starts (promising): £30,000–£60,000
+- 5+ wins, BHA 85+, or Group/Listed class: £50,000–£120,000+
+
+Key pricing factors:
+- BHA/IHRB rating of 78+ signals a quality horse and should push the estimate above £25,000.
+- Class 2 or Class 3 racing indicates a horse above average handicap level.
+- A horse with only 2–4 starts but already winning commands a youth/potential premium — price
+  above what its raw wins count suggests, because buyers pay for untapped improvement.
+- Older geldings (4–5 yr) are capped — rarely exceed £40,000 even with strong form.
+- Younger horses (2–3 yr) with wins carry breeding/potential premium and can exceed £40,000.
+- Top trainer (Aidan O'Brien, Gosden, Haggas, Juddmonte, Ballydoyle) signals class
+  even if form figures look modest.
 
 Each lot is tagged [HIT] or [FLAT] (by discipline based on sire) but this is less meaningful
 than usual — focus on the horse's own record, not the sire's racing category.
+
+IMPORTANT — no form data signal: If a lot has NO Form field in its description, treat
+this as a negative signal. At a Tattersalls HIT sale, any horse with meaningful form always
+gets a Catalogue Update published. Absence = likely unraced, problem horse, or very poor form.
+Default to £1,000–£4,000 for lots with no form unless the trainer is elite.
 
 Lot description includes trainer where known — factor this in.
 

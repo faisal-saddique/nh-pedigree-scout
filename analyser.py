@@ -151,9 +151,56 @@ Cons: [1-2 key risks or negatives]
 Est. Price: £[low]-£[high]
 """.strip()
 
+_FOAL_SYSTEM_PROMPT = """
+You are an expert bloodstock advisor specialising in foal sales at Goffs and Tattersalls.
+
+These are horses aged under one year old. They have NOT raced and have NO conformation assessment
+available to you. Buyers are breeders and speculators buying to resell as yearlings 12 months later,
+or to retain for breeding.
+
+The central question is: what will this foal make when resold as a yearling?
+
+Pricing hierarchy (most to least important):
+1. Sire commercial standing — this is the dominant factor. Fashionable, in-demand sires
+   (Frankel, Wootton Bassett, No Nay Never, Dark Angel, Mehmas, Galileo sons, Dubawi sons,
+   Sea The Stars, Kingman, Too Darn Hot, Advertise, Sergei Prokofiev, Ten Sovereigns) command
+   strong yearling premiums. A pedigree score above 70 = elite sire. Below 40 = limited commercial appeal.
+2. Dam's own racing record — a winning dam, especially at Group or Listed level, is a major premium.
+   An unraced or placed-only dam is neutral. A Group 1 dam can double or triple the estimate.
+3. Dam's production record — if the dam has already produced winners or horses that sold well as
+   yearlings, that is strong evidence of commercial value. Check dam lines carefully.
+4. Dam production score — a score above 60 signals a productive, successful female line.
+5. Sex — fillies from strong families carry a breeding premium. Colts from speed/precocity sires
+   (2yo-focused, sprinters) can also be highly sought.
+6. Dam's sire — a fashionable dam sire (Galileo, Dubawi, Sea The Stars, Oasis Dream) adds appeal.
+
+Price calibration (EUR for Goffs Ireland / GBP for Tattersalls UK):
+- Unfashionable sire (score <40), unraced or moderate dam: €/£2,000–€/£8,000
+- Decent sire (score 40–60), average dam line: €/£8,000–€/£25,000
+- Good sire (score 60–75), winning dam or strong siblings: €/£20,000–€/£60,000
+- Top sire (score 75–90) + decent family: €/£40,000–€/£120,000
+- Elite sire (score 90+) + strong family OR top sire + Group/Listed dam: €/£80,000–€/£250,000+
+- Best of best (Frankel/Wootton Bassett/Dubawi + Group 1 dam + proven siblings): €/£200,000–€/£500,000+
+
+IMPORTANT about historical comparable prices: if the comparable prices shown are from foal sales
+by the same sire, use them as the primary anchor. If they are from yearling sales, apply a
+30–50% discount (foals sell at a discount to their yearling equivalent). If no comparables exist,
+rely on the sire quality score and dam line.
+
+The pedigree score (0–100) is a sire commercial quality index — weight it heavily.
+
+Do NOT mention conformation — you cannot see the horse. Focus entirely on pedigree signals.
+
+Format your summary exactly as:
+Pros: [1-2 key positives about pedigree/family commercial appeal]
+Cons: [1-2 risks or negatives]
+Est. Price: £[low]-£[high]
+""".strip()
+
 _batch_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_SYSTEM_PROMPT)
 _breeze_up_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_BREEZE_UP_SYSTEM_PROMPT)
 _hit_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_HIT_SYSTEM_PROMPT)
+_foal_agent = Agent(_MODEL, output_type=BatchResult, system_prompt=_FOAL_SYSTEM_PROMPT)
 
 
 def _dam_summary(dam_records) -> str:
@@ -221,6 +268,14 @@ def _lot_block(lot: dict, sale_type: str = "standard") -> str:
         if trainer:
             block += f"Trainer: {trainer} | "
         block += f"Sire pedigree score (secondary signal): {lot.get('pedigree_score', 0):.1f}/100"
+    elif sale_type == "foal":
+        block += (
+            f"Dam's sire: {lot.get('dam_sire') or '?'} | "
+            f"Sire commercial score: {lot.get('pedigree_score', 0):.1f}/100"
+        )
+        prod_score = lot.get("dam_production_score")
+        if prod_score is not None:
+            block += f" | Dam production score: {prod_score:.1f}/100"
     else:
         block += (
             f"Dam's sire: {lot.get('dam_sire') or '?'} | "
@@ -229,7 +284,8 @@ def _lot_block(lot: dict, sale_type: str = "standard") -> str:
     if dam_line:
         block += f" | Dam lines: {dam_line}"
     if comp_line:
-        block += f" | Historical prices: {comp_line}"
+        label = "Foal comparables" if sale_type == "foal" else "Historical prices"
+        block += f" | {label}: {comp_line}"
     return block
 
 
@@ -239,6 +295,8 @@ def analyse_batch(lots: list[dict], sale_type: str = "standard") -> list[LotResu
         agent = _breeze_up_agent
     elif sale_type == "hit":
         agent = _hit_agent
+    elif sale_type == "foal":
+        agent = _foal_agent
     else:
         agent = _batch_agent
     prompt = (

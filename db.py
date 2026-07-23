@@ -288,6 +288,15 @@ _HIT_SALE_PATTERNS = (
     "autumn hit",
 )
 
+_FOAL_SALE_PATTERNS = (
+    "foal sale",
+    "foal-sale",
+    "november foal",
+    "december foal",
+    "autumn foal",
+    "foal sale part",
+)
+
 
 def get_sire_comparables(sire_name: str, sale_type: str = "standard") -> dict | None:
     """
@@ -353,6 +362,21 @@ def get_sire_comparables(sire_name: str, sale_type: str = "standard") -> dict | 
                     "LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS
                 ) + ")"
                 params = tuple(f"%{p}%" for p in _BREEZE_UP_SALE_PATTERNS)
+                return _query(excl_cond, params)
+            elif sale_type == "foal":
+                # Foal-only comps first — most accurate price anchor
+                foal_cond = " AND (" + " OR ".join(
+                    "LOWER(sale_name) LIKE %s" for _ in _FOAL_SALE_PATTERNS
+                ) + ")"
+                params = tuple(f"%{p}%" for p in _FOAL_SALE_PATTERNS)
+                result = _query(foal_cond, params)
+                if result:
+                    return result
+                # Fallback: yearling/store sales (AI prompt will discount these ~30-50%)
+                excl_cond = " AND NOT (" + " OR ".join(
+                    "LOWER(sale_name) LIKE %s" for _ in _BREEZE_UP_SALE_PATTERNS + _HIT_SALE_PATTERNS
+                ) + ")"
+                params = tuple(f"%{p}%" for p in _BREEZE_UP_SALE_PATTERNS + _HIT_SALE_PATTERNS)
                 return _query(excl_cond, params)
             else:
                 # Standard: exclude breeze-up inflated prices
